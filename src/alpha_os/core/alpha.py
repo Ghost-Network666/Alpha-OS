@@ -30,28 +30,31 @@ class Alpha:
         except Exception:
             return []
 
+    def generate_reply(self, command: str) -> str:
+        command = (command or "").strip()
+        if not command:
+            return "At your service, sir. How may I assist?"
+        lower = command.lower()
+        if any(w in lower for w in ("hello", "hi", "greet", "good morning")):
+            return "Good day. Alpha OS is online and awaiting your instructions, sir."
+        if "status" in lower:
+            return "All systems nominal. Awaiting live gateway data, sir."
+        if "help" in lower:
+            return (
+                "I can relay commands to your Hermes or OpenClaw runtime, "
+                "monitor agents, and keep session history. Simply state your intent."
+            )
+        return (
+            f"Understood: \"{command[:80]}\". "
+            "I shall relay this to the connected runtime when live, sir."
+        )
+
     def process(self, command: str) -> str:
         command = (command or "").strip()
         if not command:
             return "At your service, sir. How may I assist?"
         self.memory.add_turn("user", command)
-        lower = command.lower()
-        if any(w in lower for w in ("hello", "hi", "greet", "good morning")):
-            reply = (
-                "Good day. Alpha OS is online and awaiting your instructions, sir."
-            )
-        elif "status" in lower:
-            reply = "All systems nominal. Awaiting live gateway data, sir."
-        elif "help" in lower:
-            reply = (
-                "I can relay commands to your Hermes or OpenClaw runtime, "
-                "monitor agents, and keep session history. Simply state your intent."
-            )
-        else:
-            reply = (
-                f"Understood: \"{command[:80]}\". "
-                "I shall relay this to the connected runtime when live, sir."
-            )
+        reply = self.generate_reply(command)
         self.memory.add_turn("alpha", reply)
         return reply
 

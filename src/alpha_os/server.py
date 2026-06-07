@@ -20,6 +20,7 @@ from alpha_os.bridges.detector import detect_best
 from alpha_os.config import get, load_config, set_key
 from alpha_os.core.alpha import Alpha
 from alpha_os.core.events import LiveEventBuffer
+from alpha_os.integrations.mcp_bridge import MCPRegistry
 from alpha_os.integrations.tailscale import TailscaleStatus
 
 logger = logging.getLogger("alpha_os.server")
@@ -30,6 +31,7 @@ ALPHA = Alpha()
 HERMES_BRIDGE = HermesBridge()
 OPENCLAW_BRIDGE = OpenClawBridge()
 TAILSCALE = TailscaleStatus()
+MCP_REGISTRY = MCPRegistry()
 LIVE_EVENTS = LiveEventBuffer()
 _last_hermes_retry = 0.0
 _last_oc_retry = 0.0
@@ -139,6 +141,12 @@ async def _build_state() -> dict[str, Any]:
     data["live_events"] = LIVE_EVENTS.get_recent(20)
     data["event_seq"] = LIVE_EVENTS.latest_seq()
     data["orb_pulse"] = LIVE_EVENTS.consume_pulse()
+    data["mcp"] = MCP_REGISTRY.get_panel_data()
+    data["voice_config"] = {
+        "enabled": bool(get("voice.enabled", False)),
+        "wake_word": str(get("voice.wake_word", "hey alpha")),
+        "browser_mic": True,
+    }
     return data
 
 
@@ -147,6 +155,24 @@ def _on_gateway_event(source: str, event: dict[str, Any]) -> None:
     summary = LIVE_EVENTS.get_recent(1)
     if summary:
         ALPHA.memory.add_turn("gateway", f"[{source}] {summary[0]['summary']}")
+    if _active_runtime == "openclaw" and source == "openclaw":
+        asyncio.create_task(_refresh_openclaw_on_event())
+
+
+async def _refresh_openclaw_on_event() -> None:
+    try:
+        await OPENCLAW_BRIDGE._refresh_state()
+    except Exception:
+        pass
+
+
+async def _mcp_refresh_loop() -> None:
+    while True:
+        try:
+            await MCP_REGISTRY.refresh()
+        except Exception:
+            pass
+        await asyncio.sleep(60)
 
 
 async def _hermes_event_stream() -> None:
@@ -188,6 +214,8 @@ async def lifespan(app: FastAPI):
     await _init_bridges()
     _start_event_streams()
     asyncio.create_task(_tailscale_loop())
+    asyncio.create_task(_mcp_refresh_loop())
+    await MCP_REGISTRY.refresh()
     await _start_voice_loop()
     yield
     for task in _stream_tasks:
@@ -220,7 +248,8 @@ async def embed_headers(request, call_next):
         response.headers["Access-Control-Allow-Origin"] = "*"
     if request.url.path in ("/", "/static/index.html"):
         response.headers["Content-Security-Policy"] = "frame-ancestors *"
-        response.headers.pop("X-Frame-Options", None)
+        if "x-frame-options" in response.headers:
+            del response.headers["x-frame-options"]
     return response
 
 
@@ -255,8 +284,37 @@ async def api_state():
 
 @app.post("/api/command")
 async def api_command(req: CommandRequest):
-    reply = ALPHA.process(req.command)
-    return {"reply": reply, "ok": True}
+    cmd = (req.command or "").strip()
+    if not cmd:
+        return {"reply": "At your service, sir.", "ok": True, "relayed": False}
+
+    ALPHA.memory.add_turn("user", cmd)
+    relayed: dict[str, Any] | None = None
+    if _active_runtime == "hermes" and HERMES_BRIDGE._connected:
+        relayed = await HERMES_BRIDGE.send_command(cmd)
+    elif _active_runtime == "openclaw" and OPENCLAW_BRIDGE._connected:
+        relayed = await OPENCLAW_BRIDGE.send_command(cmd)
+
+    if relayed and relayed.get("reply"):
+        reply = str(relayed["reply"])
+        ok = bool(relayed.get("ok", True))
+    elif relayed and relayed.get("error"):
+        reply = (
+            f"Gateway relay failed ({relayed['error']}). "
+            + ALPHA.generate_reply(cmd)
+        )
+        ok = False
+    else:
+        reply = ALPHA.generate_reply(cmd)
+        ok = True
+
+    ALPHA.memory.add_turn("alpha", reply)
+    LIVE_EVENTS.push("command", {"type": "command", "text": cmd, "reply": reply[:120]})
+    return {
+        "reply": reply,
+        "ok": ok,
+        "relayed": bool(relayed and relayed.get("ok")),
+    }
 
 
 @app.get("/api/greet")
@@ -293,6 +351,17 @@ async def integrations():
     return _build_integrations()
 
 
+@app.get("/api/mcp")
+async def api_mcp():
+    return MCP_REGISTRY.get_panel_data()
+
+
+@app.post("/api/mcp/refresh")
+async def api_mcp_refresh():
+    data = await MCP_REGISTRY.refresh()
+    return {"ok": True, "mcp": data}
+
+
 @app.get("/api/config")
 async def api_config_get():
     return load_config()
@@ -321,7 +390,11 @@ async def ws_state(ws: WebSocket):
         while True:
             data = await _build_state()
             await ws.send_json(data)
-            await asyncio.sleep(2)
+            seq = data.get("event_seq", 0)
+            for _ in range(20):
+                await asyncio.sleep(0.1)
+                if LIVE_EVENTS.latest_seq() > seq:
+                    break
     except WebSocketDisconnect:
         pass
     except Exception as e:

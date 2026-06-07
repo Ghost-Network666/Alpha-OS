@@ -205,6 +205,40 @@ class OpenClawBridge:
             "error": None if self._connected else "OpenClaw gateway not connected",
         }
 
+    async def send_command(self, text: str) -> dict[str, Any]:
+        if not self._connected or not self._ws:
+            return {"ok": False, "error": "OpenClaw gateway offline"}
+        attempts = [
+            ("chat.send", {"text": text}),
+            ("chat.send", {"message": text}),
+            ("sessions.send", {"text": text, "message": text}),
+        ]
+        last_error = "chat.send unavailable"
+        for method, params in attempts:
+            try:
+                result = await self._rpc(method, params)
+                if result is None:
+                    continue
+                reply = ""
+                if isinstance(result, dict):
+                    reply = (
+                        result.get("text")
+                        or result.get("message")
+                        or result.get("output")
+                        or result.get("reply")
+                        or ""
+                    )
+                elif isinstance(result, str):
+                    reply = result
+                if reply or result is not None:
+                    return {
+                        "ok": True,
+                        "reply": reply or "Sent to OpenClaw.",
+                    }
+            except Exception as e:
+                last_error = str(e)[:200]
+        return {"ok": False, "error": last_error}
+
     async def disconnect(self) -> None:
         self._connected = False
         await self._cleanup()

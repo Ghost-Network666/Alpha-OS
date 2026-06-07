@@ -254,5 +254,69 @@ class HermesBridge:
             "last_event": self._last_event,
         }
 
+    async def send_command(self, text: str) -> dict[str, Any]:
+        if not self._connected:
+            return {"ok": False, "error": "Hermes gateway offline"}
+        try:
+            import asyncio
+
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                r = await client.post(
+                    f"{self.gateway_url}/v1/runs",
+                    headers=self._headers(),
+                    json={"input": text, "session_id": "alpha-os"},
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    run_id = data.get("run_id")
+                    if run_id:
+                        for _ in range(90):
+                            await asyncio.sleep(1)
+                            pr = await client.get(
+                                f"{self.gateway_url}/v1/runs/{run_id}",
+                                headers=self._headers(),
+                            )
+                            if pr.status_code != 200:
+                                continue
+                            run = pr.json()
+                            status = run.get("status")
+                            if status in ("completed", "failed", "cancelled"):
+                                output = run.get("output") or run.get("error") or ""
+                                return {
+                                    "ok": status == "completed",
+                                    "reply": str(output),
+                                    "run_id": run_id,
+                                }
+                        return {
+                            "ok": True,
+                            "reply": "Command dispatched — still running on Hermes.",
+                            "run_id": run_id,
+                        }
+
+                r2 = await client.post(
+                    f"{self.gateway_url}/v1/chat/completions",
+                    headers=self._headers(),
+                    json={
+                        "model": "hermes-agent",
+                        "messages": [{"role": "user", "content": text}],
+                        "stream": False,
+                    },
+                )
+                if r2.status_code == 200:
+                    body = r2.json()
+                    content = (
+                        body.get("choices", [{}])[0]
+                        .get("message", {})
+                        .get("content", "")
+                    )
+                    return {"ok": True, "reply": content}
+                return {
+                    "ok": False,
+                    "error": f"HTTP {r2.status_code}",
+                }
+        except Exception as e:
+            logger.warning("Hermes send_command failed: %s", e)
+            return {"ok": False, "error": str(e)[:200]}
+
     async def disconnect(self) -> None:
         self._connected = False
