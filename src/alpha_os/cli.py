@@ -135,6 +135,9 @@ async def cmd_setup(args: argparse.Namespace) -> int:
 def cmd_serve(args: argparse.Namespace) -> int:
     set_key("server.port", args.port)
     set_key("server.host", args.host)
+    if getattr(args, "voice", False):
+        set_key("voice.enabled", True)
+        _print("  Voice loop enabled (server mic — also use browser mic in dashboard)")
     url = f"http://{args.host}:{args.port}"
     _print(f"Alpha OS → {url}")
     if args.open:
@@ -161,6 +164,11 @@ def main() -> None:
     p_serve.add_argument("--port", type=int, default=8080)
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--open", action="store_true", help="Open browser")
+    p_serve.add_argument(
+        "--voice",
+        action="store_true",
+        help="Enable server-side mic loop (requires pip install alpha-os[voice])",
+    )
 
     sub.add_parser("doctor", help="Check gateway connectivity")
 
@@ -173,10 +181,7 @@ def main() -> None:
         raise SystemExit(cmd_serve(args))
 
     # Default: serve
-    args.port = 8080
-    args.host = "127.0.0.1"
-    args.open = True
-    raise SystemExit(cmd_serve(argparse.Namespace(port=8080, host="127.0.0.1", open=True)))
+    raise SystemExit(cmd_serve(argparse.Namespace(port=8080, host="127.0.0.1", open=True, voice=False)))
 
 
 if __name__ == "__main__":

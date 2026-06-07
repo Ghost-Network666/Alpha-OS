@@ -28,6 +28,9 @@
     .onboarding { backdrop-filter: blur(8px); background: rgba(3,3,8,.85); }
     .metric-pulse { animation: pulse 2s ease-in-out infinite; }
     @keyframes pulse { 0%,100%{opacity:.7} 50%{opacity:1} }
+    .orb-flash { animation: orbFlash 0.6s ease-out; }
+    @keyframes orbFlash { 0%{filter:brightness(2) saturate(1.5)} 100%{filter:none} }
+    .mic-active { box-shadow: 0 0 20px rgba(255,42,109,.6); border-color: #ff2a6d !important; }
   </style>
 </head>
 <body class="min-h-screen overflow-x-hidden">
@@ -117,6 +120,7 @@
         <div id="telemetry" class="h-32 overflow-y-auto text-xs text-slate-500 space-y-1 font-mono"></div>
       </div>
       <div class="panel rounded-3xl p-4 flex gap-2 items-center">
+        <button id="mic-btn" onclick="toggleMic()" title="Voice command" class="w-12 h-12 rounded-full border border-slate-700 bg-[#050508] flex items-center justify-center text-lg hover:border-pink-800 transition-all">🎙</button>
         <input id="command-input" type="text" placeholder="Command Alpha…" class="flex-1 bg-[#050508] border border-slate-800 rounded-2xl px-4 py-3 text-sm outline-none focus:border-cyan-800" onkeydown="if(event.key==='Enter')sendCommand()" />
         <button onclick="sendCommand()" class="px-5 py-3 rounded-2xl bg-pink-950 border border-pink-800 text-pink-300 text-sm font-semibold">Send</button>
       </div>
@@ -165,6 +169,9 @@
 let currentState = {};
 let ws = null;
 let mcpLogged = false;
+let lastEventSeq = 0;
+let micActive = false;
+let recognition = null;
 
 function tick() {
   document.getElementById("clock").textContent = new Date().toLocaleTimeString();
@@ -292,6 +299,21 @@ function renderBoards(data) {
     : '<div class="italic text-slate-600">No activity yet</div>';
 }
 
+function renderLiveEvents(data) {
+  const events = data.live_events || [];
+  for (const ev of events) {
+    if (ev.seq <= lastEventSeq) continue;
+    lastEventSeq = ev.seq;
+    addLog(ev.summary, ev.source);
+  }
+  if (data.orb_pulse) {
+    const orb = document.getElementById("orb-canvas");
+    orb.classList.remove("orb-flash");
+    void orb.offsetWidth;
+    orb.classList.add("orb-flash");
+  }
+}
+
 function applyState(data) {
   currentState = data;
   renderBadges(data);
@@ -300,6 +322,7 @@ function applyState(data) {
   renderTailscale(data.tailscale);
   renderIntegrations(data.integrations);
   renderBoards(data);
+  renderLiveEvents(data);
   if (data.greeting) document.getElementById("greeting").textContent = data.greeting;
   const offline = !data.hermes_connected && !data.openclaw_connected;
   if (offline && !sessionStorage.getItem("onboarding-dismissed")) {
@@ -361,6 +384,45 @@ function reconnect() {
 function toggleView(mode) {
   document.getElementById("ops-boards").style.display = mode === "minimal" ? "none" : "grid";
   document.getElementById("metrics-bar").style.display = mode === "minimal" ? "none" : "grid";
+}
+
+function toggleMic() {
+  const btn = document.getElementById("mic-btn");
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    addLog("Browser speech recognition not supported — type commands instead", "system");
+    return;
+  }
+  if (micActive && recognition) {
+    recognition.stop();
+    return;
+  }
+  recognition = new SR();
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.lang = "en-GB";
+  recognition.onstart = () => {
+    micActive = true;
+    btn.classList.add("mic-active");
+    addLog("Listening…", "voice");
+  };
+  recognition.onend = () => {
+    micActive = false;
+    btn.classList.remove("mic-active");
+  };
+  recognition.onerror = (e) => {
+    micActive = false;
+    btn.classList.remove("mic-active");
+    if (e.error !== "aborted") addLog("Mic: " + e.error, "system");
+  };
+  recognition.onresult = (e) => {
+    const text = e.results[0][0].transcript.trim();
+    if (text) {
+      document.getElementById("command-input").value = text;
+      sendCommand();
+    }
+  };
+  recognition.start();
 }
 
 // Orb animation

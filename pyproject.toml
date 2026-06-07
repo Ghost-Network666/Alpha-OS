@@ -29,7 +29,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-voice = ["mcp>=1.2.0"]
+voice = ["mcp>=1.2.0", "SpeechRecognition>=3.10", "PyAudio>=0.2.14"]
 
 [project.scripts]
 alpha-os = "alpha_os.cli:main"

@@ -19,6 +19,7 @@ from alpha_os.bridges.openclaw_bridge import OpenClawBridge
 from alpha_os.bridges.detector import detect_best
 from alpha_os.config import get, load_config, set_key
 from alpha_os.core.alpha import Alpha
+from alpha_os.core.events import LiveEventBuffer
 from alpha_os.integrations.tailscale import TailscaleStatus
 
 logger = logging.getLogger("alpha_os.server")
@@ -29,9 +30,12 @@ ALPHA = Alpha()
 HERMES_BRIDGE = HermesBridge()
 OPENCLAW_BRIDGE = OpenClawBridge()
 TAILSCALE = TailscaleStatus()
+LIVE_EVENTS = LiveEventBuffer()
 _last_hermes_retry = 0.0
 _last_oc_retry = 0.0
 _active_runtime = "offline"
+_stream_tasks: list[asyncio.Task] = []
+_voice_loop: Any = None
 
 
 def _apply_config_to_bridges() -> None:
@@ -132,14 +136,64 @@ async def _build_state() -> dict[str, Any]:
         "toolsets": len(data["integrations"].get("toolsets", [])),
         "skills": len(data["integrations"].get("skills", [])),
     }
+    data["live_events"] = LIVE_EVENTS.get_recent(20)
+    data["event_seq"] = LIVE_EVENTS.latest_seq()
+    data["orb_pulse"] = LIVE_EVENTS.consume_pulse()
     return data
+
+
+def _on_gateway_event(source: str, event: dict[str, Any]) -> None:
+    LIVE_EVENTS.push(source, event)
+    summary = LIVE_EVENTS.get_recent(1)
+    if summary:
+        ALPHA.memory.add_turn("gateway", f"[{source}] {summary[0]['summary']}")
+
+
+async def _hermes_event_stream() -> None:
+    while True:
+        if _active_runtime != "hermes" or not HERMES_BRIDGE._connected:
+            await asyncio.sleep(5)
+            continue
+        await HERMES_BRIDGE.stream_events(lambda e: _on_gateway_event("hermes", e))
+        await asyncio.sleep(5)
+
+
+def _start_event_streams() -> None:
+    OPENCLAW_BRIDGE.on_event(lambda e: _on_gateway_event("openclaw", e))
+    _stream_tasks.append(asyncio.create_task(_hermes_event_stream()))
+
+
+async def _start_voice_loop() -> None:
+    global _voice_loop
+    if not get("voice.enabled", False):
+        return
+    try:
+        from alpha_os.voice import VoiceLoop
+
+        async def on_transcript(text: str) -> None:
+            reply = ALPHA.process(text)
+            LIVE_EVENTS.push("voice", {"type": "transcript", "text": text, "reply": reply})
+
+        _voice_loop = VoiceLoop(
+            wake_word=str(get("voice.wake_word", "hey alpha")),
+            on_transcript=on_transcript,
+        )
+        await _voice_loop.start()
+    except Exception as e:
+        logger.warning("Voice loop unavailable: %s", e)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await _init_bridges()
+    _start_event_streams()
     asyncio.create_task(_tailscale_loop())
+    await _start_voice_loop()
     yield
+    for task in _stream_tasks:
+        task.cancel()
+    if _voice_loop:
+        await _voice_loop.stop()
     await HERMES_BRIDGE.disconnect()
     await OPENCLAW_BRIDGE.disconnect()
     if hasattr(ALPHA.memory, "close"):
@@ -157,6 +211,18 @@ async def _tailscale_loop():
 
 
 app = FastAPI(title="Alpha OS", version="0.1.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def embed_headers(request, call_next):
+    response = await call_next(request)
+    if request.url.path in ("/", "/static/index.html", "/api/state"):
+        response.headers["Access-Control-Allow-Origin"] = "*"
+    if request.url.path in ("/", "/static/index.html"):
+        response.headers["Content-Security-Policy"] = "frame-ancestors *"
+        response.headers.pop("X-Frame-Options", None)
+    return response
+
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -196,6 +262,20 @@ async def api_command(req: CommandRequest):
 @app.get("/api/greet")
 async def api_greet():
     return {"greeting": ALPHA.get_dashboard_state()["greeting"]}
+
+
+@app.get("/api/voice/status")
+async def voice_status():
+    try:
+        from alpha_os.voice import voice_available
+        available = voice_available()
+    except Exception:
+        available = False
+    return {
+        "server_voice": available and bool(get("voice.enabled", False)),
+        "browser_voice": True,
+        "wake_word": str(get("voice.wake_word", "hey alpha")),
+    }
 
 
 @app.get("/api/hermes/status")
