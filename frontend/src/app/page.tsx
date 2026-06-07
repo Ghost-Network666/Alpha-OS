@@ -13,6 +13,7 @@ import { TopBar } from "@/components/TopBar";
 import { useAlphaState } from "@/hooks/useAlphaState";
 import { useWakeWordListener } from "@/hooks/useWakeWordListener";
 import { fetchState, sendCommand } from "@/lib/api";
+import { speakAlphaReply } from "@/lib/speech";
 
 export default function DashboardPage() {
   const { state, reconnect, metricHistory, pulseKey } = useAlphaState();
@@ -24,6 +25,16 @@ export default function DashboardPage() {
   const live = Boolean(state.live);
   const wakeWord = state.voice_config?.wake_word ?? "hey alpha";
   const browserWake = state.voice_config?.browser_wake ?? true;
+  const autoTts = state.voice_config?.auto_tts ?? true;
+  const ttsVoice = state.voice_config?.tts_voice ?? "en-US-AriaNeural";
+
+  const speakReply = useCallback(
+    (reply: string) => {
+      if (!autoTts) return;
+      speakAlphaReply(reply, ttsVoice);
+    },
+    [autoTts, ttsVoice]
+  );
 
   const onLog = useCallback(
     (msg: string, who = "system") => {
@@ -43,12 +54,14 @@ export default function DashboardPage() {
       onLog(cmd, "you");
       try {
         const res = await sendCommand(cmd);
-        onLog(res.reply ?? "No response", "alpha");
+        const reply = res.reply ?? "No response";
+        onLog(reply, "alpha");
+        speakReply(reply);
       } catch (e) {
         onLog(e instanceof Error ? e.message : "Voice command failed", "system");
       }
     },
-    [live, onLog]
+    [live, onLog, speakReply]
   );
 
   const { status: wakeStatus } = useWakeWordListener({
@@ -109,6 +122,7 @@ export default function DashboardPage() {
                 wakeStatus={wakeStatus}
                 wakeWord={wakeWord}
                 onLog={onLog}
+                onReply={speakReply}
               />
             </div>
             <TelemetryPanel events={state.live_events} logs={logs} />

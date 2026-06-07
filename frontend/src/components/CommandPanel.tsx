@@ -12,6 +12,7 @@ interface CommandPanelProps {
   wakeStatus?: WakeWordStatus;
   wakeWord?: string;
   onLog: (msg: string, who?: string) => void;
+  onReply?: (reply: string) => void;
 }
 
 function wakeStatusLabel(status: WakeWordStatus | undefined, wakeWord: string): string {
@@ -38,6 +39,7 @@ export function CommandPanel({
   wakeStatus = "idle",
   wakeWord = "hey alpha",
   onLog,
+  onReply,
 }: CommandPanelProps) {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -50,7 +52,9 @@ export function CommandPanel({
     setInput("");
     try {
       const res = await sendCommand(cmd);
-      onLog(res.reply ?? "No response", "alpha");
+      const reply = res.reply ?? "No response";
+      onLog(reply, "alpha");
+      onReply?.(reply);
     } catch (e) {
       onLog(e instanceof Error ? e.message : "Command failed", "system");
     } finally {

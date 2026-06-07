@@ -20,7 +20,7 @@ const DEFAULT_VOICE: Partial<VoiceConfig> = {
   grok_oauth: true,
   record_key: "ctrl+b",
   max_recording_seconds: 120,
-  auto_tts: false,
+  auto_tts: true,
   beep_enabled: true,
   silence_threshold: 200,
   silence_duration: 3.0,
@@ -49,7 +49,7 @@ export function SettingsDrawer({
   const [serverWake, setServerWake] = useState(false);
   const [grokOauth, setGrokOauth] = useState(true);
   const [recordKey, setRecordKey] = useState(DEFAULT_VOICE.record_key!);
-  const [autoTts, setAutoTts] = useState(false);
+  const [autoTts, setAutoTts] = useState(true);
   const [beepEnabled, setBeepEnabled] = useState(true);
   const [silenceThreshold, setSilenceThreshold] = useState(200);
   const [silenceDuration, setSilenceDuration] = useState(3.0);
@@ -69,7 +69,7 @@ export function SettingsDrawer({
     setServerWake(v.server_wake ?? v.enabled ?? false);
     setGrokOauth(v.grok_oauth ?? true);
     setRecordKey(v.record_key ?? "ctrl+b");
-    setAutoTts(v.auto_tts ?? false);
+    setAutoTts(v.auto_tts ?? true);
     setBeepEnabled(v.beep_enabled ?? true);
     setSilenceThreshold(v.silence_threshold ?? 200);
     setSilenceDuration(v.silence_duration ?? 3.0);

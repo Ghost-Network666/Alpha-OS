@@ -20,7 +20,7 @@ VOICE_DEFAULTS: dict[str, Any] = {
     "server_wake": False,
     "record_key": "ctrl+b",
     "max_recording_seconds": 120,
-    "auto_tts": False,
+    "auto_tts": True,
     "beep_enabled": True,
     "silence_threshold": 200,
     "silence_duration": 3.0,
