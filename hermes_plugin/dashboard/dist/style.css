@@ -1,0 +1,5 @@
+/* Alpha OS Hermes dashboard plugin styles */
+[data-plugin="alpha-os"] {
+  --alpha-cyan: #00f0ff;
+  --alpha-pink: #ff2a6d;
+}
