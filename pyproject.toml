@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "alpha-os"
+version = "0.1.0"
+description = "Voice-first cyber command-center — default web UI for Hermes Agent and OpenClaw"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Ghost Network" }]
+keywords = ["hermes", "openclaw", "ai-agent", "dashboard", "voice"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Web Environment",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "httpx>=0.27",
+  "websockets>=12.0",
+  "pydantic>=2.0",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+voice = ["mcp>=1.2.0"]
+
+[project.scripts]
+alpha-os = "alpha_os.cli:main"
+
+[project.entry-points."hermes_agent.plugins"]
+alpha-os = "alpha_os.hermes_plugin_entry:register"
+
+[project.urls]
+Homepage = "https://github.com/Ghost-Network666/Alpha-OS"
+Repository = "https://github.com/Ghost-Network666/Alpha-OS"
+Issues = "https://github.com/Ghost-Network666/Alpha-OS/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/alpha_os"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/hermes_plugin",
+  "/openclaw_plugin",
+  "/install.sh",
+  "/README.md",
+  "/LICENSE",
+]

@@ -1,0 +1,5 @@
+name: alpha-os
+version: 0.1.0
+description: Alpha OS cyber command-center — default dashboard UI for Hermes Agent
+author: Ghost Network
+provides_tools: []

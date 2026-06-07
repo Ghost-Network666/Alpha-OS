@@ -1,0 +1,28 @@
+name: alpha-os-cyber
+label: Alpha OS Cyber
+description: Neon cyan and pink cyber command-center theme for Alpha OS
+layoutVariant: cockpit
+palette:
+  background:
+    hex: "#030308"
+    alpha: 1.0
+  midground: "#00f0ff"
+  foreground:
+    hex: "#ff2a6d"
+    alpha: 0.15
+  warmGlow: "rgba(255, 42, 109, 0.2)"
+  noiseOpacity: 0.5
+typography:
+  fontSans: '"Share Tech Mono", ui-monospace, monospace'
+  fontMono: '"Share Tech Mono", ui-monospace, monospace'
+  fontUrl: "https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap"
+  baseSize: "14px"
+  lineHeight: "1.5"
+  letterSpacing: "0.04em"
+layout:
+  radius: "0.5rem"
+  density: compact
+colorOverrides:
+  primary: "#00f0ff"
+  accent: "#ff2a6d"
+  ring: "#00f0ff"

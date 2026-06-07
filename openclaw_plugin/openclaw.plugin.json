@@ -1,0 +1,23 @@
+{
+  "id": "alpha-os",
+  "name": "Alpha OS",
+  "description": "Cyber command-center web UI for OpenClaw — run alpha-os serve",
+  "version": "0.1.0",
+  "contracts": {
+    "cliCommands": ["alpha"]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "port": {
+        "type": "number",
+        "description": "Alpha OS standalone server port",
+        "default": 8080
+      }
+    }
+  }
+}

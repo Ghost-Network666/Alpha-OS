@@ -1,0 +1,19 @@
+{
+  "name": "@ghostnetwork/alpha-os-openclaw",
+  "version": "0.1.0",
+  "description": "Alpha OS — default cyber command-center for OpenClaw",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ghost-Network666/Alpha-OS.git",
+    "directory": "openclaw_plugin"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "compat": {
+      "pluginApi": ">=2026.3.0",
+      "minGatewayVersion": "2026.3.0"
+    }
+  }
+}
