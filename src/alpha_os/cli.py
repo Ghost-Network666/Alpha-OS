@@ -14,7 +14,15 @@ from alpha_os import __version__
 from alpha_os.bridges.detector import detect_best, detect_hermes, detect_openclaw
 from alpha_os.config import CONFIG_DIR, load_config, save_config, set_key
 
-PKG_ROOT = Path(__file__).resolve().parent.parent.parent
+def _resolve_pkg_root() -> Path:
+    here = Path(__file__).resolve().parent
+    for candidate in (here.parent, here.parent.parent):
+        if (candidate / "hermes_plugin").is_dir():
+            return candidate
+    return here.parent.parent
+
+
+PKG_ROOT = _resolve_pkg_root()
 HERMES_PLUGIN_SRC = PKG_ROOT / "hermes_plugin"
 THEME_SRC = PKG_ROOT / "hermes_plugin" / "dashboard" / "alpha-os-cyber.yaml"
 

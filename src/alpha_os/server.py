@@ -142,10 +142,16 @@ async def _build_state() -> dict[str, Any]:
     data["event_seq"] = LIVE_EVENTS.latest_seq()
     data["orb_pulse"] = LIVE_EVENTS.consume_pulse()
     data["mcp"] = MCP_REGISTRY.get_panel_data()
+    try:
+        from alpha_os.voice import get_voice_providers
+        voice_providers = get_voice_providers()
+    except Exception:
+        voice_providers = []
     data["voice_config"] = {
         "enabled": bool(get("voice.enabled", False)),
         "wake_word": str(get("voice.wake_word", "hey alpha")),
         "browser_mic": True,
+        "providers": voice_providers,
     }
     return data
 
@@ -272,6 +278,8 @@ class ConfigRequest(BaseModel):
 class VoiceConfigRequest(BaseModel):
     wake_word: Optional[str] = None
     enabled: Optional[bool] = None
+    provider_id: Optional[str] = None
+    provider_enabled: Optional[bool] = None
 
 
 @app.get("/")
@@ -333,11 +341,15 @@ async def voice_config_post(req: VoiceConfigRequest):
         set_key("voice.wake_word", req.wake_word.strip() or "hey alpha")
     if req.enabled is not None:
         set_key("voice.enabled", req.enabled)
+    if req.provider_id and req.provider_enabled is not None:
+        set_key(f"voice.providers.{req.provider_id}", req.provider_enabled)
+    from alpha_os.voice import get_voice_providers
     return {
         "ok": True,
         "voice": {
             "enabled": bool(get("voice.enabled", False)),
             "wake_word": str(get("voice.wake_word", "hey alpha")),
+            "providers": get_voice_providers(),
         },
     }
 
@@ -345,14 +357,17 @@ async def voice_config_post(req: VoiceConfigRequest):
 @app.get("/api/voice/status")
 async def voice_status():
     try:
-        from alpha_os.voice import voice_available
+        from alpha_os.voice import get_voice_providers, voice_available
         available = voice_available()
+        providers = get_voice_providers()
     except Exception:
         available = False
+        providers = []
     return {
         "server_voice": available and bool(get("voice.enabled", False)),
         "browser_voice": True,
         "wake_word": str(get("voice.wake_word", "hey alpha")),
+        "providers": providers,
     }
 
 

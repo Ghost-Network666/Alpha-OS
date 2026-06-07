@@ -101,6 +101,17 @@ pip install -e ".[voice]"   # or: pip install fastapi uvicorn httpx websockets p
 
 MCP servers: add `~/.alpha-os/mcp.json` (Cursor format) or use `mcp.servers` from `~/.openclaw/openclaw.json`.
 
+## Publishing
+
+**PyPI** — create a GitHub Release; the `publish-pypi` workflow uploads the wheel when `PYPI_API_TOKEN` is set.
+
+**ClawHub** (OpenClaw plugin):
+
+```bash
+./scripts/publish-clawhub.sh
+openclaw plugins install clawhub:ghostnetwork/alpha-os
+```
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

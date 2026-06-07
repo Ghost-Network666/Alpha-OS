@@ -192,6 +192,8 @@
         <input id="set-wake-word" class="w-full bg-[#050508] border border-slate-700 rounded-lg px-2 py-1 text-xs font-mono" value="hey alpha" onchange="saveVoiceSettings()" />
         <p class="text-[10px] text-slate-600 mt-2">Server mic: <code>alpha-os serve --voice</code></p>
         <p id="voice-status-line" class="text-[10px] text-slate-500 mt-1"></p>
+        <div class="section-title mb-2 mt-3">Voice providers</div>
+        <div id="voice-providers" class="text-xs space-y-2"></div>
       </div>
       <div>
         <div class="section-title mb-2">MCP</div>
@@ -297,6 +299,26 @@ function renderTailscale(ts) {
   }
 }
 
+function renderVoiceProviders(providers) {
+  const el = document.getElementById("voice-providers");
+  if (!el) return;
+  const list = providers || [];
+  if (!list.length) {
+    el.innerHTML = '<div class="italic text-slate-600">No providers detected</div>';
+    return;
+  }
+  el.innerHTML = list.map(p => `
+    <label class="flex items-start gap-2 px-2 py-2 rounded-lg bg-[#050508] border border-slate-800 ${p.available ? "" : "opacity-50"}">
+      <input type="checkbox" class="accent-cyan-500 mt-0.5" ${p.enabled ? "checked" : ""} ${p.id === "browser" || !p.available ? "disabled" : ""}
+        onchange="toggleVoiceProvider('${p.id}', this.checked)" />
+      <span>
+        <span class="text-slate-300">${p.label}</span>
+        <span class="text-[10px] text-slate-600 block">${p.note || p.kind || ""}</span>
+      </span>
+    </label>
+  `).join("");
+}
+
 function renderMcp(mcp) {
   if (!mcp) return;
   const el = document.getElementById("mcp-servers");
@@ -394,6 +416,7 @@ function applyState(data) {
   if (vsl && data.voice_config) {
     vsl.textContent = data.voice_config.enabled ? "Server voice: ON" : "Server voice: off (browser mic available)";
   }
+  renderVoiceProviders(data.voice_config?.providers);
   if (data.greeting) document.getElementById("greeting").textContent = data.greeting;
   const offline = !data.hermes_connected && !data.openclaw_connected;
   if (offline && !sessionStorage.getItem("onboarding-dismissed")) {
@@ -439,12 +462,36 @@ function toggleSettings() {
 async function saveVoiceSettings() {
   const wake = document.getElementById("set-wake-word").value.trim();
   try {
-    await fetch("/api/voice/config", {
+    const r = await fetch("/api/voice/config", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
       body: JSON.stringify({ wake_word: wake }),
     });
+    const d = await r.json();
+    if (d.voice?.providers) renderVoiceProviders(d.voice.providers);
     addLog("Voice settings saved", "alpha");
+  } catch (_) {}
+}
+
+async function toggleVoiceProvider(id, enabled) {
+  if (id === "server_mic") {
+    await fetch("/api/voice/config", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ enabled }),
+    });
+    addLog(enabled ? "Server voice enabled" : "Server voice disabled", "alpha");
+    refreshState();
+    return;
+  }
+  try {
+    const r = await fetch("/api/voice/config", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ provider_id: id, provider_enabled: enabled }),
+    });
+    const d = await r.json();
+    if (d.voice?.providers) renderVoiceProviders(d.voice.providers);
   } catch (_) {}
 }
 
