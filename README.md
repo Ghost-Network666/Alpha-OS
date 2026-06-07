@@ -19,7 +19,7 @@ alpha-os setup
 alpha-os serve
 ```
 
-Or one-liner (after repo is published):
+Or one-liner:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Ghost-Network666/Alpha-OS/main/install.sh | bash
