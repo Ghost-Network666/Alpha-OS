@@ -90,6 +90,17 @@ else
   fail "frontend/ not found — clone the full repo: git clone https://github.com/Ghost-Network666/Alpha-OS.git"
 fi
 
+# ── Detect existing runtimes ──────────────────────────────────
+HERMES_HOME="${HOME}/.hermes"
+OPENCLAW_HOME="${HOME}/.openclaw"
+HAS_HERMES=0
+HAS_OPENCLAW=0
+[[ -d "${HERMES_HOME}" ]] && HAS_HERMES=1 && ok "Found ~/.hermes (Hermes Agent)"
+[[ -d "${OPENCLAW_HOME}" ]] && HAS_OPENCLAW=1 && ok "Found ~/.openclaw (OpenClaw)"
+if [[ "${HAS_HERMES}" -eq 0 && "${HAS_OPENCLAW}" -eq 0 ]]; then
+  info "No ~/.hermes or ~/.openclaw yet — pick a runtime in the Alpha OS connect screen"
+fi
+
 # ── Alpha OS setup ────────────────────────────────────────────
 info "Running alpha-os setup…"
 alpha-os setup || true
@@ -99,21 +110,31 @@ echo -e "${GREEN}═════════════════════
 echo -e "${GREEN}  Alpha OS installed successfully${NC}"
 echo -e "${GREEN}════════════════════════════════════════════════════════${NC}"
 echo ""
-echo "  1. Install Hermes Agent (if you haven't):"
-echo "     curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash"
-echo "     hermes setup"
+if [[ "${HAS_HERMES}" -eq 1 ]]; then
+  echo "  Hermes detected at ~/.hermes"
+  echo "    • Enable API: API_SERVER_ENABLED=true in ~/.hermes/.env"
+  echo "    • Start gateway: hermes gateway"
+else
+  echo "  Install Hermes (option A):"
+  echo "    curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash"
+  echo "    hermes setup"
+fi
 echo ""
-echo "  2. Enable API in ~/.hermes/.env:"
-echo "     API_SERVER_ENABLED=true"
-echo "     API_SERVER_KEY=your-secret-key"
+if [[ "${HAS_OPENCLAW}" -eq 1 ]]; then
+  echo "  OpenClaw detected at ~/.openclaw"
+  echo "    • Start gateway: openclaw gateway run"
+else
+  echo "  Install OpenClaw (option B):"
+  echo "    curl -fsSL https://openclaw.ai/install.sh | bash"
+  echo "    openclaw onboard --install-daemon"
+fi
 echo ""
-echo "  3. Start everything:"
-echo "     ./scripts/start.sh"
-echo ""
-echo "  4. Open http://127.0.0.1:3000"
+echo "  Start Alpha OS:"
+echo "    ./scripts/start.sh"
+echo "    Open http://127.0.0.1:3000 — choose Hermes or OpenClaw on the connect screen"
 echo ""
 echo "  Other commands:"
 echo "     source .venv/bin/activate"
-echo "     alpha-os doctor     # check gateway"
+echo "     alpha-os doctor     # check gateways"
 echo "     alpha-os serve      # backend only (port 8080)"
 echo ""

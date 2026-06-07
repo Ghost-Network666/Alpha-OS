@@ -16,6 +16,14 @@ logger = logging.getLogger("alpha_os.detector")
 HERMES_HOME = __import__("pathlib").Path.home() / ".hermes"
 OPENCLAW_HOME = __import__("pathlib").Path.home() / ".openclaw"
 
+
+def hermes_installed() -> bool:
+    return HERMES_HOME.exists()
+
+
+def openclaw_installed() -> bool:
+    return OPENCLAW_HOME.exists()
+
 PALETTE = ["#00f0ff", "#39ff14", "#ff2a6d", "#ff9f1c", "#7b2cbf"]
 
 

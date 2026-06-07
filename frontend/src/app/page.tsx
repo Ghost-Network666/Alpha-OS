@@ -103,7 +103,10 @@ export default function DashboardPage() {
       {!live ? (
         <ConnectScreen
           hermesInstalled={Boolean(state.hermes_installed)}
+          openclawInstalled={Boolean(state.openclaw_installed)}
           hermesConnected={state.hermes_connected}
+          openclawConnected={state.openclaw_connected}
+          runtimePreference={state.runtime_preference}
           onOpenSettings={() => setSettingsOpen(true)}
           onReconnect={reconnect}
         />

@@ -17,7 +17,13 @@ from pydantic import BaseModel
 
 from alpha_os.bridges.hermes_bridge import HermesBridge
 from alpha_os.bridges.openclaw_bridge import OpenClawBridge
-from alpha_os.bridges.detector import detect_best
+from alpha_os.bridges.detector import (
+    detect_best,
+    detect_hermes,
+    detect_openclaw,
+    hermes_installed,
+    openclaw_installed,
+)
 from alpha_os.config import get, load_config, set_hermes_env, set_key
 from alpha_os.voice.hermes_sync import apply_voice_config, load_voice_config
 from alpha_os.core.alpha import Alpha
@@ -33,13 +39,13 @@ HERMES_HOME = Path.home() / ".hermes"
 ALPHA = Alpha()
 
 
-def _hermes_installed() -> bool:
-    return HERMES_HOME.exists()
-
-
 def _is_live() -> bool:
-    """Live = ~/.hermes exists AND Hermes gateway connected. No stale/mock data before this."""
-    return _hermes_installed() and HERMES_BRIDGE._connected
+    """Live when the active runtime gateway is connected. No demo data while offline."""
+    if _active_runtime == "hermes":
+        return HERMES_BRIDGE._connected
+    if _active_runtime == "openclaw":
+        return OPENCLAW_BRIDGE._connected
+    return False
 
 
 def _empty_panel_state() -> dict[str, Any]:
@@ -118,28 +124,43 @@ def _apply_config_to_bridges() -> None:
 async def _init_bridges() -> None:
     global _active_runtime
     _apply_config_to_bridges()
-    info = await detect_best()
-    if info.name == "hermes" and info.gateway_url:
-        HERMES_BRIDGE.gateway_url = info.gateway_url
-        if info.api_key:
-            HERMES_BRIDGE.api_key = info.api_key
-    if info.name == "openclaw":
-        if info.ws_url:
-            OPENCLAW_BRIDGE.ws_url = info.ws_url
-        if info.api_key:
-            OPENCLAW_BRIDGE.token = info.api_key
+    cfg = load_config()
+    runtime_pref = str(cfg.get("runtime", "auto")).lower()
 
-    if info.name == "hermes":
+    hermes_info, openclaw_info = await asyncio.gather(
+        detect_hermes(),
+        detect_openclaw(),
+    )
+
+    if hermes_info.gateway_url:
+        HERMES_BRIDGE.gateway_url = hermes_info.gateway_url
+    if hermes_info.api_key:
+        HERMES_BRIDGE.api_key = hermes_info.api_key
+    if openclaw_info.ws_url:
+        OPENCLAW_BRIDGE.ws_url = openclaw_info.ws_url
+    elif openclaw_info.gateway_url:
+        OPENCLAW_BRIDGE.ws_url = openclaw_info.gateway_url.replace(
+            "http://", "ws://"
+        ).replace("https://", "wss://")
+    if openclaw_info.api_key:
+        OPENCLAW_BRIDGE.token = openclaw_info.api_key
+
+    target = runtime_pref
+    if target == "auto":
+        best = await detect_best()
+        target = best.name if best.name in ("hermes", "openclaw") else "offline"
+
+    if target == "hermes":
         ok = await HERMES_BRIDGE.connect()
         _active_runtime = "hermes" if ok else "offline"
         logger.info("Hermes gateway %s", "connected" if ok else "offline")
-    elif info.name == "openclaw":
+    elif target == "openclaw":
         ok = await OPENCLAW_BRIDGE.connect()
         _active_runtime = "openclaw" if ok else "offline"
         logger.info("OpenClaw gateway %s", "connected" if ok else "offline")
     else:
         _active_runtime = "offline"
-        logger.info("No runtime detected — panels will start empty")
+        logger.info("No runtime connected — panels will start empty")
 
 
 def _polymarket_metrics(mcp_data: dict[str, Any]) -> dict[str, Any]:
@@ -214,7 +235,7 @@ async def _build_state() -> dict[str, Any]:
         agents = OPENCLAW_BRIDGE.get_agent_list() or []
 
     live = _is_live()
-    hermes_installed = _hermes_installed()
+    cfg = load_config()
 
     data = ALPHA.get_dashboard_state(
         hermes_agents=agents if live else None,
@@ -222,9 +243,23 @@ async def _build_state() -> dict[str, Any]:
     )
     data["hermes"] = HERMES_BRIDGE.get_status()
     data["openclaw"] = OPENCLAW_BRIDGE.get_status()
-    data["hermes_installed"] = hermes_installed
+    data["hermes_installed"] = hermes_installed()
+    data["openclaw_installed"] = openclaw_installed()
     data["hermes_connected"] = HERMES_BRIDGE._connected
     data["openclaw_connected"] = OPENCLAW_BRIDGE._connected
+    data["runtime_preference"] = str(cfg.get("runtime", "auto"))
+    data["runtimes"] = {
+        "hermes": {
+            "installed": hermes_installed(),
+            "connected": HERMES_BRIDGE._connected,
+            "gateway_url": HERMES_BRIDGE.gateway_url,
+        },
+        "openclaw": {
+            "installed": openclaw_installed(),
+            "connected": OPENCLAW_BRIDGE._connected,
+            "ws_url": OPENCLAW_BRIDGE.ws_url,
+        },
+    }
     data["live"] = live
 
     if not live:

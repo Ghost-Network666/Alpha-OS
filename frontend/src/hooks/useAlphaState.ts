@@ -17,6 +17,7 @@ const EMPTY_STATE: AlphaState = {
   greeting: "",
   runtime: "offline",
   hermes_installed: false,
+  openclaw_installed: false,
   live: false,
   hermes_connected: false,
   openclaw_connected: false,

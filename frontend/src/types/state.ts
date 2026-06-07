@@ -101,11 +101,24 @@ export interface VoiceConfig {
   providers: VoiceProvider[];
 }
 
+export interface RuntimeStatus {
+  installed: boolean;
+  connected: boolean;
+  gateway_url?: string;
+  ws_url?: string;
+}
+
 export interface AlphaState {
   agents: AgentCard[];
   greeting: string;
   runtime: string;
+  runtime_preference?: string;
   hermes_installed?: boolean;
+  openclaw_installed?: boolean;
+  runtimes?: {
+    hermes: RuntimeStatus;
+    openclaw: RuntimeStatus;
+  };
   live?: boolean;
   hermes_connected: boolean;
   openclaw_connected: boolean;

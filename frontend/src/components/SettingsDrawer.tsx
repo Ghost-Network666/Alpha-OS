@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { postConfig, postVoiceConfig } from "@/lib/api";
-import type { AlphaState, VoiceConfig } from "@/types/state";
+import type { VoiceConfig } from "@/types/state";
 
 interface SettingsDrawerProps {
   open: boolean;
