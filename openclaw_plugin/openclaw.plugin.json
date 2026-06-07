@@ -4,7 +4,9 @@
   "description": "Cyber command-center web UI for OpenClaw — run alpha-os serve",
   "version": "0.1.0",
   "contracts": {
-    "cliCommands": ["alpha"]
+    "cliCommands": ["alpha"],
+    "gatewayMethods": ["alpha-os.status"],
+    "httpRoutes": ["/alpha-os", "/alpha-os/status"]
   },
   "activation": {
     "onStartup": true

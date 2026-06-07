@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Alpha OS</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #030308;
+      color: #94a3b8;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(0,240,255,.12);
+      background: rgba(3,3,8,.9);
+    }
+    .title { color: #00f0ff; font-weight: 700; letter-spacing: .15em; font-size: 14px; }
+    .pill {
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid #065f46;
+      color: #34d399;
+    }
+    .pill.off { border-color: #92400e; color: #fbbf24; }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      padding: 12px 16px;
+    }
+    .metric {
+      background: #050508;
+      border: 1px solid #1e293b;
+      border-radius: 10px;
+      padding: 8px;
+      text-align: center;
+    }
+    .metric label { display: block; font-size: 9px; text-transform: uppercase; opacity: .6; }
+    .metric span { color: #00f0ff; font-family: monospace; font-size: 18px; }
+    .actions { padding: 0 16px 12px; display: flex; gap: 12px; font-size: 12px; }
+    a { color: #00f0ff; }
+    iframe {
+      flex: 1;
+      width: 100%;
+      border: none;
+      border-top: 1px solid rgba(0,240,255,.08);
+      background: #030308;
+      min-height: 60vh;
+    }
+    .placeholder {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      text-align: center;
+      font-size: 13px;
+    }
+    button {
+      background: #0c1a1f;
+      border: 1px solid #155e75;
+      color: #67e8f9;
+      border-radius: 8px;
+      padding: 6px 12px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="title">ALPHA OS</span>
+    <span id="status-pill" class="pill off">○ OFFLINE</span>
+  </header>
+  <div class="metrics" id="metrics" hidden>
+    <div class="metric"><label>Agents</label><span id="m-agents">—</span></div>
+    <div class="metric"><label>Sessions</label><span id="m-sessions">—</span></div>
+    <div class="metric"><label>Toolsets</label><span id="m-toolsets">—</span></div>
+    <div class="metric"><label>Skills</label><span id="m-skills">—</span></div>
+  </div>
+  <div class="actions">
+    <button type="button" id="embed-btn">Embed dashboard</button>
+    <a id="open-link" href="#" target="_blank" rel="noopener">Open full UI ↗</a>
+  </div>
+  <div id="placeholder" class="placeholder">
+    Run <code>alpha-os serve</code> on port <span id="port-label">8080</span>, then click Embed dashboard.
+  </div>
+  <iframe id="frame" title="Alpha OS" hidden></iframe>
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var port = params.get("port") || localStorage.getItem("alpha-os-port") || "8080";
+      var host = location.hostname || "127.0.0.1";
+      var base = "http://" + host + ":" + port;
+      document.getElementById("port-label").textContent = port;
+      document.getElementById("open-link").href = base + "/";
+
+      function setLive(live) {
+        var pill = document.getElementById("status-pill");
+        pill.textContent = live ? "⬡ LIVE" : "○ OFFLINE";
+        pill.classList.toggle("off", !live);
+      }
+
+      function poll() {
+        fetch(base + "/api/state", { mode: "cors" })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) {
+            if (!d) { setLive(false); return; }
+            setLive(d.openclaw_connected || d.hermes_connected);
+            document.getElementById("metrics").hidden = false;
+            var m = d.metrics || {};
+            document.getElementById("m-agents").textContent = m.agents ?? "—";
+            document.getElementById("m-sessions").textContent = m.sessions ?? "—";
+            document.getElementById("m-toolsets").textContent = m.toolsets ?? "—";
+            document.getElementById("m-skills").textContent = m.skills ?? "—";
+          })
+          .catch(function () { setLive(false); });
+      }
+
+      document.getElementById("embed-btn").addEventListener("click", function () {
+        var frame = document.getElementById("frame");
+        var ph = document.getElementById("placeholder");
+        frame.src = base + "/";
+        frame.hidden = false;
+        ph.hidden = true;
+        localStorage.setItem("alpha-os-port", port);
+      });
+
+      poll();
+      setInterval(poll, 4000);
+    })();
+  </script>
+</body>
+</html>

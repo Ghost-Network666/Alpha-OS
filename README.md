@@ -95,9 +95,11 @@ Every layer is independently replaceable — fork a bridge, reskin the UI, or ad
 ```bash
 git clone https://github.com/Ghost-Network666/Alpha-OS.git
 cd Alpha-OS
-pip install -e ".[voice]"
-alpha-os serve --open
+pip install -e ".[voice]"   # or: pip install fastapi uvicorn httpx websockets pyyaml
+./scripts/dev-serve.sh      # hot reload at http://127.0.0.1:8080
 ```
+
+MCP servers: add `~/.alpha-os/mcp.json` (Cursor format) or use `mcp.servers` from `~/.openclaw/openclaw.json`.
 
 ## License
 

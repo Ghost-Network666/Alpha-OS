@@ -189,8 +189,9 @@
           Browser mic (Web Speech API)
         </label>
         <label class="text-[10px] text-slate-500 block mb-1">Wake word (server)</label>
-        <input id="set-wake-word" class="w-full bg-[#050508] border border-slate-700 rounded-lg px-2 py-1 text-xs font-mono" value="hey alpha" />
+        <input id="set-wake-word" class="w-full bg-[#050508] border border-slate-700 rounded-lg px-2 py-1 text-xs font-mono" value="hey alpha" onchange="saveVoiceSettings()" />
         <p class="text-[10px] text-slate-600 mt-2">Server mic: <code>alpha-os serve --voice</code></p>
+        <p id="voice-status-line" class="text-[10px] text-slate-500 mt-1"></p>
       </div>
       <div>
         <div class="section-title mb-2">MCP</div>
@@ -389,6 +390,10 @@ function applyState(data) {
   renderLiveEvents(data);
   if (data.runtime) document.getElementById("set-runtime").textContent = data.runtime;
   if (data.voice_config?.wake_word) document.getElementById("set-wake-word").value = data.voice_config.wake_word;
+  const vsl = document.getElementById("voice-status-line");
+  if (vsl && data.voice_config) {
+    vsl.textContent = data.voice_config.enabled ? "Server voice: ON" : "Server voice: off (browser mic available)";
+  }
   if (data.greeting) document.getElementById("greeting").textContent = data.greeting;
   const offline = !data.hermes_connected && !data.openclaw_connected;
   if (offline && !sessionStorage.getItem("onboarding-dismissed")) {
@@ -429,6 +434,18 @@ function toggleSettings() {
   const isClosed = drawer.classList.contains("translate-x-full");
   drawer.classList.toggle("translate-x-full", !isClosed);
   backdrop.classList.toggle("hidden", !isClosed);
+}
+
+async function saveVoiceSettings() {
+  const wake = document.getElementById("set-wake-word").value.trim();
+  try {
+    await fetch("/api/voice/config", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ wake_word: wake }),
+    });
+    addLog("Voice settings saved", "alpha");
+  } catch (_) {}
 }
 
 async function refreshMcp() {

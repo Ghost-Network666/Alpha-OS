@@ -41,6 +41,32 @@ def _normalize_entry(name: str, raw: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _parse_openclaw_config(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    mcp = data.get("mcp")
+    if not isinstance(mcp, dict):
+        return []
+    servers = mcp.get("servers")
+    if not isinstance(servers, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    for name, cfg in servers.items():
+        if not isinstance(cfg, dict):
+            continue
+        entry = _normalize_entry(name, cfg)
+        if entry:
+            entry["source"] = "openclaw"
+            out.append(entry)
+    return out
+
+
 def _parse_file(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -71,12 +97,24 @@ def discover_mcp_servers() -> list[dict[str, Any]]:
         home / ".cursor" / "mcp.json",
         home / ".config" / "cursor" / "mcp.json",
     ]
+    openclaw_paths = [
+        home / ".openclaw" / "openclaw.json",
+        home / ".openclaw" / "clawdbot.json",
+        home / ".openclaw" / "moltbot.json",
+    ]
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
     for path in paths:
         if not path or not str(path):
             continue
         for entry in _parse_file(path):
+            name = entry["name"]
+            if name in seen:
+                continue
+            seen.add(name)
+            out.append(entry)
+    for path in openclaw_paths:
+        for entry in _parse_openclaw_config(path):
             name = entry["name"]
             if name in seen:
                 continue

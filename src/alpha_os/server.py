@@ -269,6 +269,11 @@ class ConfigRequest(BaseModel):
     openclaw_token: Optional[str] = None
 
 
+class VoiceConfigRequest(BaseModel):
+    wake_word: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
 @app.get("/")
 async def index():
     index_path = STATIC_DIR / "index.html"
@@ -320,6 +325,21 @@ async def api_command(req: CommandRequest):
 @app.get("/api/greet")
 async def api_greet():
     return {"greeting": ALPHA.get_dashboard_state()["greeting"]}
+
+
+@app.post("/api/voice/config")
+async def voice_config_post(req: VoiceConfigRequest):
+    if req.wake_word is not None:
+        set_key("voice.wake_word", req.wake_word.strip() or "hey alpha")
+    if req.enabled is not None:
+        set_key("voice.enabled", req.enabled)
+    return {
+        "ok": True,
+        "voice": {
+            "enabled": bool(get("voice.enabled", False)),
+            "wake_word": str(get("voice.wake_word", "hey alpha")),
+        },
+    }
 
 
 @app.get("/api/voice/status")
