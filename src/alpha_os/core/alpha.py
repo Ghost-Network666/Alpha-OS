@@ -63,29 +63,29 @@ class Alpha:
         hermes_agents: Optional[List[dict]] = None,
         runtime: str = "offline",
     ) -> dict[str, Any]:
-        agents = []
+        agents: list[dict[str, Any]] = []
         if hermes_agents:
             agents = hermes_agents
         elif self._demo_agents:
             agents = self._demo_agents
-        else:
-            agents = [{
-                "name": "Alpha",
-                "title": "Awaiting gateway",
-                "status": "Ready",
-                "color": "#ff2a6d",
-            }]
+
+        connected = runtime == "hermes" and bool(hermes_agents is not None)
+        greeting = (
+            "Gateway connected. Awaiting your instructions, sir."
+            if connected
+            else ""
+        )
 
         return {
             "agents": agents,
-            "memory": self.memory.to_summary(),
+            "memory": {"recent": [], "history_length": 0} if not connected else self.memory.to_summary(),
             "style": {
                 "theme": "cyber",
-                "accent": "#00f0ff",
-                "orb": "#ff2a6d",
+                "accent": "#00f5ff",
+                "orb": "#ff2d78",
             },
             "view": "full",
-            "greeting": "Alpha OS online. Connect your Hermes or OpenClaw gateway to begin.",
+            "greeting": greeting,
             "hermes_connected": False,
             "runtime": runtime,
         }

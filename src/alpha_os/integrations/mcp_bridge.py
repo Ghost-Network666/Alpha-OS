@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import Any
 
-from alpha_os.integrations.mcp_discovery import discover_mcp_servers
+from alpha_os.integrations.mcp_discovery import discover_mcp_servers, discovery_sources
 
 logger = logging.getLogger("alpha_os.mcp")
 
@@ -14,11 +14,19 @@ logger = logging.getLogger("alpha_os.mcp")
 class MCPBridge:
     """Single stdio MCP server connection."""
 
-    def __init__(self, name: str, command: str, args: list[str], env: dict[str, str]):
+    def __init__(
+        self,
+        name: str,
+        command: str,
+        args: list[str],
+        env: dict[str, str],
+        source: str = "",
+    ):
         self.name = name
         self.command = command
         self.args = args
         self.env = env
+        self.source = source
         self._connected = False
         self._tools: list[dict[str, Any]] = []
         self._error: str | None = None
@@ -66,10 +74,12 @@ class MCPBridge:
         return {
             "name": self.name,
             "connected": self._connected,
+            "transport": "stdio",
             "tool_count": len(self._tools),
             "tools": self._tools[:12],
             "error": self._error,
             "command": self.command,
+            "source": self.source,
         }
 
 
@@ -95,6 +105,7 @@ class MCPRegistry:
                 command=d["command"] or "",
                 args=d.get("args") or [],
                 env=d.get("env") or {},
+                source=str(d.get("source") or ""),
             )
             for d in defs
             if d.get("transport") == "stdio" and d.get("command")
@@ -110,7 +121,11 @@ class MCPRegistry:
                 "server_count": 0,
                 "tool_count": 0,
                 "servers": [],
-                "error": "No MCP servers configured — add ~/.alpha-os/mcp.json",
+                "error": (
+                    "No stdio MCP servers found — configure mcp_servers in "
+                    "~/.hermes/config.yaml or mcp.servers in ~/.openclaw/openclaw.json"
+                ),
+                "sources": discovery_sources(),
             }
             self._last_scan = time.time()
             return dict(self._data)
@@ -135,7 +150,8 @@ class MCPRegistry:
             "server_count": len(self._servers),
             "tool_count": total_tools,
             "servers": servers_out,
-            "error": None if any_connected else "All MCP servers offline",
+            "sources": discovery_sources(),
+            "error": None if any_connected else "All stdio MCP servers offline",
         }
         self._last_scan = time.time()
         return dict(self._data)

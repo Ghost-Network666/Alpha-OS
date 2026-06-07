@@ -6,12 +6,89 @@ Voice-first cyber command-center — the default web UI for [Hermes Agent](https
 
 ## What it does
 
-- Auto-detects your Hermes or OpenClaw installation
-- Shows live agents, toolsets, skills, and sessions — nothing hardcoded
-- Graceful offline mode — panels stay empty until real data arrives
-- Modular bridges — swap, extend, or overhaul any layer independently
+- Connects to your Hermes gateway — **blank until `~/.hermes` is installed and live**
+- Discovers agents, toolsets, skills, and sessions dynamically at runtime
+- No hardcoded agents, no demo data, no stale mock panels
+- Modular bridges — Hermes REST, OpenClaw WebSocket, MCP, Tailscale
 
-## Quick install
+---
+
+## Install from repo (recommended)
+
+Anyone can clone and run with two commands:
+
+```bash
+git clone https://github.com/Ghost-Network666/Alpha-OS.git
+cd Alpha-OS
+./install.sh
+```
+
+This installs:
+- Python 3.10+ virtualenv (`.venv`)
+- Alpha OS backend (`pip install -e .`)
+- Next.js 15 frontend (`frontend/`, npm install)
+- Node.js via nvm if not already present
+
+Then start:
+
+```bash
+./scripts/start.sh
+```
+
+Open **http://127.0.0.1:3000** (frontend) — API runs on **http://127.0.0.1:8080**.
+
+Or use the CLI:
+
+```bash
+source .venv/bin/activate
+alpha-os start
+```
+
+---
+
+## Connect Hermes (required for live data)
+
+Alpha OS stays empty until Hermes is installed and the gateway is running.
+
+```bash
+# 1. Install Hermes Agent
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+hermes setup
+
+# 2. Enable API server in ~/.hermes/.env
+API_SERVER_ENABLED=true
+API_SERVER_KEY=your-secret-key
+
+# 3. Start gateway
+hermes gateway
+
+# 4. In another terminal — start Alpha OS
+cd Alpha-OS
+./scripts/start.sh
+```
+
+Optional — embed in Hermes dashboard:
+
+```bash
+alpha-os setup
+hermes plugins enable alpha-os
+hermes dashboard
+```
+
+---
+
+## Quick install (backend only)
+
+For backend without cloning the full repo:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Ghost-Network666/Alpha-OS/main/install.sh | bash
+alpha-os serve    # legacy UI at http://127.0.0.1:8080
+```
+
+For the **full Next.js UI**, clone the repo and run `./install.sh`.
+
+Or via pip:
 
 ```bash
 pip install alpha-os
@@ -19,49 +96,30 @@ alpha-os setup
 alpha-os serve
 ```
 
-Or one-liner:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Ghost-Network666/Alpha-OS/main/install.sh | bash
-```
-
-## Hermes users
-
-```bash
-curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
-hermes setup
-pip install alpha-os
-alpha-os setup
-hermes gateway
-hermes dashboard    # Alpha OS replaces the home page
-```
-
-Enable API server in `~/.hermes/.env`:
-
-```bash
-API_SERVER_ENABLED=true
-API_SERVER_KEY=your-secret-key
-```
-
-## OpenClaw users
-
-```bash
-npm i -g openclaw@latest
-openclaw onboard --install-daemon
-pip install alpha-os
-alpha-os setup
-openclaw plugins install ./path/to/alpha-os/openclaw_plugin
-alpha-os serve        # or: openclaw alpha
-```
+---
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `alpha-os` | Start server and open browser |
-| `alpha-os serve` | Start on http://127.0.0.1:8080 |
+| `./install.sh` | Full install from repo clone (Python + frontend) |
+| `./scripts/start.sh` | Start backend + Next.js frontend |
+| `alpha-os start` | Same as `start.sh` (repo clone only) |
+| `alpha-os serve` | Backend only on http://127.0.0.1:8080 |
 | `alpha-os setup` | Detect runtime, install plugins, write config |
-| `alpha-os doctor` | Check gateway connectivity |
+| `alpha-os doctor` | Check gateway + install health |
+
+---
+
+## Requirements
+
+| Component | Version |
+|-----------|---------|
+| Python | 3.10+ |
+| Node.js | 18+ (installed automatically by `./install.sh` via nvm) |
+| Hermes Agent | For live gateway data |
+
+---
 
 ## Configuration
 
@@ -73,44 +131,49 @@ Stored in `~/.alpha-os/config.yaml`. Override with env vars:
 | `HERMES_API_KEY` | from `~/.hermes/.env` |
 | `OPENCLAW_GATEWAY_URL` | `ws://127.0.0.1:18789` |
 | `OPENCLAW_GATEWAY_TOKEN` | from `~/.openclaw/openclaw.json` |
+| `ALPHA_OS_PORT` | `8080` |
+| `ALPHA_OS_FRONTEND_PORT` | `3000` |
+
+MCP servers: configure stdio servers in `~/.hermes/config.yaml` (`mcp_servers`) or `~/.openclaw/openclaw.json` (`mcp.servers`). Alpha OS probes the same stdio connections Hermes/OpenClaw use.
+
+---
 
 ## Architecture
 
 ```
+frontend/             # Next.js 15 App Router (primary UI)
 src/alpha_os/
-├── bridges/          # Hermes REST + OpenClaw WebSocket adapters
+├── bridges/          # Hermes REST + OpenClaw WebSocket
 ├── core/             # Alpha butler + SQLite memory
-├── integrations/     # Tailscale panel
-├── dashboard/        # Single-file cyber UI
+├── integrations/     # MCP + Tailscale
 └── server.py         # FastAPI + WebSocket state push
 
-hermes_plugin/        # Overrides hermes dashboard home page
+hermes_plugin/        # Hermes dashboard home override
 openclaw_plugin/      # openclaw alpha CLI command
+scripts/
+├── install.sh        # Full repo install
+└── start.sh          # Run backend + frontend
 ```
 
-Every layer is independently replaceable — fork a bridge, reskin the UI, or add panels without touching the rest.
+---
 
 ## Development
 
 ```bash
 git clone https://github.com/Ghost-Network666/Alpha-OS.git
 cd Alpha-OS
-pip install -e ".[voice]"   # or: pip install fastapi uvicorn httpx websockets pyyaml
-./scripts/dev-serve.sh      # hot reload at http://127.0.0.1:8080
+./install.sh
+./scripts/start.sh
 ```
 
-MCP servers: add `~/.alpha-os/mcp.json` (Cursor format) or use `mcp.servers` from `~/.openclaw/openclaw.json`.
-
-## Publishing
-
-**PyPI** — create a GitHub Release; the `publish-pypi` workflow uploads the wheel when `PYPI_API_TOKEN` is set.
-
-**ClawHub** (OpenClaw plugin):
+Backend only with hot reload:
 
 ```bash
-./scripts/publish-clawhub.sh
-openclaw plugins install clawhub:ghostnetwork/alpha-os
+source .venv/bin/activate
+./scripts/dev-serve.sh
 ```
+
+---
 
 ## License
 

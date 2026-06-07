@@ -1,87 +1,87 @@
-"""Voice provider discovery — only reports real availability, never fake status."""
+"""Voice provider discovery — Hermes/OpenClaw Grok OAuth only (no xAI API keys)."""
 
 from __future__ import annotations
 
-import os
-import shutil
 from typing import Any
 
-from alpha_os.config import get
+from alpha_os.voice.grok_oauth import grok_via_runtime_oauth, hermes_installed, openclaw_grok_oauth_configured
+from alpha_os.voice.hermes_sync import load_voice_config
 
 
-def _has_env(*keys: str) -> bool:
-    return any(os.getenv(k, "").strip() for k in keys)
-
-
-def get_voice_providers() -> list[dict[str, Any]]:
+def get_voice_providers(
+    *,
+    hermes_connected: bool = False,
+    openclaw_connected: bool = False,
+    runtime: str = "offline",
+) -> list[dict[str, Any]]:
     """Return provider cards for the settings panel."""
     providers: list[dict[str, Any]] = []
+    voice_cfg = load_voice_config()
+    grok_oauth = grok_via_runtime_oauth(
+        hermes_connected=hermes_connected,
+        openclaw_connected=openclaw_connected,
+        runtime=runtime,
+    )
 
     providers.append({
-        "id": "browser",
-        "label": "Browser Web Speech",
-        "kind": "stt",
+        "id": "wake_phrase",
+        "label": "Wake phrase (“hey alpha”)",
+        "kind": "wake",
         "available": True,
         "enabled": True,
-        "note": "Chrome/Edge mic button in dashboard",
+        "note": "Always-on phrase detection — no button, no API keys",
     })
 
-    server_available = False
+    providers.append({
+        "id": "hermes_gateway",
+        "label": "Hermes gateway",
+        "kind": "relay",
+        "available": hermes_installed(),
+        "enabled": hermes_connected or runtime == "hermes",
+        "note": "Commands relay to the user's Hermes server when connected",
+    })
+
+    providers.append({
+        "id": "grok_oauth",
+        "label": "Grok (X OAuth / SuperGrok)",
+        "kind": "sts",
+        "available": grok_oauth,
+        "enabled": grok_oauth and bool(voice_cfg.get("grok_oauth", True)),
+        "note": (
+            "Uses X OAuth / SuperGrok via Hermes or OpenClaw — not xAI API keys"
+            if grok_oauth
+            else "Sign in with X OAuth in OpenClaw (openclaw models auth login --provider xai) "
+            "or connect Hermes with Grok configured"
+        ),
+    })
+
+    if openclaw_grok_oauth_configured():
+        providers.append({
+            "id": "openclaw_xai",
+            "label": "OpenClaw xAI OAuth",
+            "kind": "auth",
+            "available": True,
+            "enabled": openclaw_connected or runtime == "openclaw",
+            "note": "Grok models authenticated via OpenClaw OAuth profile",
+        })
+
+    server_wake = False
     try:
         import speech_recognition  # noqa: F401
-        server_available = True
+
+        server_wake = True
     except ImportError:
         pass
 
     providers.append({
-        "id": "server_mic",
-        "label": "Server microphone",
-        "kind": "stt",
-        "available": server_available,
-        "enabled": bool(get("voice.enabled", False)) and server_available,
+        "id": "server_wake",
+        "label": "Server wake listener",
+        "kind": "wake",
+        "available": server_wake,
+        "enabled": bool(voice_cfg.get("server_wake", False)) and server_wake,
         "note": "pip install 'alpha-os[voice]' && alpha-os serve --voice"
-        if not server_available
-        else "alpha-os serve --voice",
+        if not server_wake
+        else "Server mic listens for “hey alpha”, relays via Hermes",
     })
-
-    if _has_env("DEEPGRAM_API_KEY"):
-        providers.append({
-            "id": "deepgram",
-            "label": "Deepgram",
-            "kind": "stt",
-            "available": True,
-            "enabled": bool(get("voice.providers.deepgram", False)),
-            "note": "DEEPGRAM_API_KEY detected",
-        })
-
-    if _has_env("ELEVENLABS_API_KEY", "XI_API_KEY"):
-        providers.append({
-            "id": "elevenlabs",
-            "label": "ElevenLabs",
-            "kind": "tts",
-            "available": True,
-            "enabled": bool(get("voice.providers.elevenlabs", False)),
-            "note": "API key detected in environment",
-        })
-
-    if _has_env("OPENAI_API_KEY"):
-        providers.append({
-            "id": "openai_realtime",
-            "label": "OpenAI Realtime",
-            "kind": "sts",
-            "available": True,
-            "enabled": bool(get("voice.providers.openai_realtime", False)),
-            "note": "OPENAI_API_KEY detected — route via Hermes/OpenClaw Talk",
-        })
-
-    if shutil.which("whisper") or shutil.which("faster-whisper"):
-        providers.append({
-            "id": "faster_whisper",
-            "label": "Faster-Whisper (local)",
-            "kind": "stt",
-            "available": True,
-            "enabled": bool(get("voice.providers.faster_whisper", False)),
-            "note": "Local whisper binary found on PATH",
-        })
 
     return providers

@@ -37,12 +37,20 @@ async def cmd_doctor() -> int:
     openclaw = await detect_openclaw()
     best = await detect_best()
 
+    frontend_ok = (PKG_ROOT / "frontend" / "node_modules").exists()
+    install_sh = PKG_ROOT / "scripts" / "install.sh"
+
+    _print(f"  Repo root:      {PKG_ROOT}")
+    _print(f"  Install script: {'found' if install_sh.exists() else 'not found (pip-only install)'}")
+    _print(f"  Frontend deps:  {'installed' if frontend_ok else 'missing — run ./install.sh'}")
     _print(f"  Hermes home:    {'~/.hermes found' if Path.home().joinpath('.hermes').exists() else 'not found'}")
     _print(f"  Hermes API:     {'LIVE' if hermes.connected else 'offline'} — {hermes.gateway_url}")
     _print(f"  OpenClaw home:  {'~/.openclaw found' if Path.home().joinpath('.openclaw').exists() else 'not found'}")
     _print(f"  OpenClaw GW:    {'LIVE' if openclaw.connected else 'offline'} — {openclaw.ws_url or openclaw.gateway_url}")
     _print(f"  Active runtime: {best.name} ({'connected' if best.connected else 'offline'})")
     _print(f"  Config:         {CONFIG_DIR / 'config.yaml'}")
+    if not frontend_ok and install_sh.exists():
+        _print("\n  Run: ./install.sh && ./scripts/start.sh")
     return 0 if best.connected else 1
 
 
@@ -140,6 +148,24 @@ async def cmd_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_start(args: argparse.Namespace) -> int:
+    start_sh = PKG_ROOT / "scripts" / "start.sh"
+    if not start_sh.exists():
+        _print("  scripts/start.sh not found — are you running from a repo clone?")
+        _print("  Clone: git clone https://github.com/Ghost-Network666/Alpha-OS.git")
+        _print("  Then:  ./install.sh && ./scripts/start.sh")
+        return 1
+    if not (PKG_ROOT / "frontend" / "node_modules").exists():
+        _print("  Frontend not installed. Run: ./install.sh")
+        return 1
+    _print("Starting Alpha OS (backend + frontend)…")
+    try:
+        subprocess.run(["bash", str(start_sh)], cwd=str(PKG_ROOT), check=False)
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     set_key("server.port", args.port)
     set_key("server.host", args.host)
@@ -180,6 +206,8 @@ def main() -> None:
 
     sub.add_parser("doctor", help="Check gateway connectivity")
 
+    sub.add_parser("start", help="Start backend + Next.js frontend (repo clone)")
+
     args = parser.parse_args()
     if args.cmd == "setup":
         raise SystemExit(asyncio.run(cmd_setup(args)))
@@ -187,6 +215,8 @@ def main() -> None:
         raise SystemExit(asyncio.run(cmd_doctor()))
     if args.cmd == "serve":
         raise SystemExit(cmd_serve(args))
+    if args.cmd == "start":
+        raise SystemExit(cmd_start(args))
 
     # Default: serve
     raise SystemExit(cmd_serve(argparse.Namespace(port=8080, host="127.0.0.1", open=True, voice=False)))

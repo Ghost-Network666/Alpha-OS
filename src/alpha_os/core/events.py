@@ -80,3 +80,7 @@ class LiveEventBuffer:
     @property
     def pulse(self) -> bool:
         return self._pulse
+
+    def events_per_minute(self, window_sec: float = 60.0) -> int:
+        cutoff = time.time() - window_sec
+        return sum(1 for e in self._events if e.get("ts", 0) >= cutoff)

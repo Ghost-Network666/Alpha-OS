@@ -53,10 +53,12 @@ packages = ["src/alpha_os"]
 [tool.hatch.build.targets.sdist]
 include = [
   "/src",
+  "/frontend",
   "/hermes_plugin",
   "/openclaw_plugin",
   "/scripts",
   "/install.sh",
+  "/.nvmrc",
   "/README.md",
   "/LICENSE",
 ]

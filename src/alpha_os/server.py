@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -17,7 +18,8 @@ from pydantic import BaseModel
 from alpha_os.bridges.hermes_bridge import HermesBridge
 from alpha_os.bridges.openclaw_bridge import OpenClawBridge
 from alpha_os.bridges.detector import detect_best
-from alpha_os.config import get, load_config, set_key
+from alpha_os.config import get, load_config, set_hermes_env, set_key
+from alpha_os.voice.hermes_sync import apply_voice_config, load_voice_config
 from alpha_os.core.alpha import Alpha
 from alpha_os.core.events import LiveEventBuffer
 from alpha_os.integrations.mcp_bridge import MCPRegistry
@@ -26,8 +28,64 @@ from alpha_os.integrations.tailscale import TailscaleStatus
 logger = logging.getLogger("alpha_os.server")
 
 STATIC_DIR = Path(__file__).parent / "dashboard" / "static"
+HERMES_HOME = Path.home() / ".hermes"
 
 ALPHA = Alpha()
+
+
+def _hermes_installed() -> bool:
+    return HERMES_HOME.exists()
+
+
+def _is_live() -> bool:
+    """Live = ~/.hermes exists AND Hermes gateway connected. No stale/mock data before this."""
+    return _hermes_installed() and HERMES_BRIDGE._connected
+
+
+def _empty_panel_state() -> dict[str, Any]:
+    return {
+        "agents": [],
+        "greeting": "",
+        "memory": {"recent": [], "history_length": 0},
+        "integrations": {
+            "connected": False,
+            "runtime": "offline",
+            "toolsets": [],
+            "skills": [],
+            "sessions": [],
+        },
+        "metrics": {
+            "sessions": 0,
+            "agents": 0,
+            "tools": 0,
+            "toolsets": 0,
+            "skills": 0,
+            "events_per_min": 0,
+        },
+        "live_events": [],
+        "event_seq": 0,
+        "orb_pulse": False,
+        "mcp": {
+            "connected": False,
+            "server_count": 0,
+            "tool_count": 0,
+            "servers": [],
+        },
+        "tailscale": {
+            "available": False,
+            "backend_state": "offline",
+            "self_ip": None,
+            "hostname": None,
+            "exit_node": None,
+            "peers": [],
+        },
+        "polymarket": {
+            "connected": False,
+            "pnl_today": None,
+            "open_positions": None,
+            "win_rate": None,
+        },
+    }
 HERMES_BRIDGE = HermesBridge()
 OPENCLAW_BRIDGE = OpenClawBridge()
 TAILSCALE = TailscaleStatus()
@@ -84,6 +142,36 @@ async def _init_bridges() -> None:
         logger.info("No runtime detected — panels will start empty")
 
 
+def _polymarket_metrics(mcp_data: dict[str, Any]) -> dict[str, Any]:
+    """Surface Polymarket MCP when connected — values filled when tools respond."""
+    servers = mcp_data.get("servers") or []
+    poly = next(
+        (
+            s
+            for s in servers
+            if isinstance(s, dict)
+            and "polymarket" in str(s.get("name", "")).lower()
+            and s.get("connected")
+        ),
+        None,
+    )
+    if not poly:
+        return {
+            "connected": False,
+            "pnl_today": None,
+            "open_positions": None,
+            "win_rate": None,
+        }
+    return {
+        "connected": True,
+        "server": poly.get("name"),
+        "tool_count": poly.get("tool_count", 0),
+        "pnl_today": None,
+        "open_positions": None,
+        "win_rate": None,
+    }
+
+
 def _build_integrations() -> dict[str, Any]:
     if _active_runtime == "hermes" and HERMES_BRIDGE._connected:
         return {
@@ -125,32 +213,61 @@ async def _build_state() -> dict[str, Any]:
     elif _active_runtime == "openclaw" and OPENCLAW_BRIDGE._connected:
         agents = OPENCLAW_BRIDGE.get_agent_list() or []
 
-    data = ALPHA.get_dashboard_state(hermes_agents=agents or None, runtime=_active_runtime)
+    live = _is_live()
+    hermes_installed = _hermes_installed()
+
+    data = ALPHA.get_dashboard_state(
+        hermes_agents=agents if live else None,
+        runtime=_active_runtime,
+    )
     data["hermes"] = HERMES_BRIDGE.get_status()
     data["openclaw"] = OPENCLAW_BRIDGE.get_status()
+    data["hermes_installed"] = hermes_installed
     data["hermes_connected"] = HERMES_BRIDGE._connected
     data["openclaw_connected"] = OPENCLAW_BRIDGE._connected
-    data["integrations"] = _build_integrations()
-    data["tailscale"] = TAILSCALE.to_dict()
-    data["metrics"] = {
-        "sessions": len(data["integrations"].get("sessions", [])),
-        "agents": len(agents),
-        "toolsets": len(data["integrations"].get("toolsets", [])),
-        "skills": len(data["integrations"].get("skills", [])),
-    }
-    data["live_events"] = LIVE_EVENTS.get_recent(20)
-    data["event_seq"] = LIVE_EVENTS.latest_seq()
-    data["orb_pulse"] = LIVE_EVENTS.consume_pulse()
-    data["mcp"] = MCP_REGISTRY.get_panel_data()
+    data["live"] = live
+
+    if not live:
+        data.update(_empty_panel_state())
+    else:
+        data["integrations"] = _build_integrations()
+        data["tailscale"] = TAILSCALE.to_dict()
+        toolsets = data["integrations"].get("toolsets", [])
+        mcp_data = MCP_REGISTRY.get_panel_data()
+        tool_count = sum(
+            len(ts.get("tools", [])) if isinstance(ts, dict) else 0 for ts in toolsets
+        )
+        if not tool_count and mcp_data.get("tool_count"):
+            tool_count = int(mcp_data["tool_count"])
+
+        data["metrics"] = {
+            "sessions": len(data["integrations"].get("sessions", [])),
+            "agents": len(agents),
+            "tools": tool_count or len(toolsets),
+            "toolsets": len(toolsets),
+            "skills": len(data["integrations"].get("skills", [])),
+            "events_per_min": LIVE_EVENTS.events_per_minute(),
+        }
+        data["polymarket"] = _polymarket_metrics(mcp_data)
+        data["live_events"] = LIVE_EVENTS.get_recent(20)
+        data["event_seq"] = LIVE_EVENTS.latest_seq()
+        data["orb_pulse"] = LIVE_EVENTS.consume_pulse()
+        data["mcp"] = mcp_data
+        data["memory"] = ALPHA.memory.to_summary()
     try:
         from alpha_os.voice import get_voice_providers
-        voice_providers = get_voice_providers()
+        voice_providers = get_voice_providers(
+            hermes_connected=HERMES_BRIDGE._connected,
+            openclaw_connected=OPENCLAW_BRIDGE._connected,
+            runtime=_active_runtime,
+        )
     except Exception:
         voice_providers = []
+    voice_cfg = load_voice_config()
     data["voice_config"] = {
-        "enabled": bool(get("voice.enabled", False)),
-        "wake_word": str(get("voice.wake_word", "hey alpha")),
-        "browser_mic": True,
+        **voice_cfg,
+        "enabled": bool(voice_cfg.get("server_wake", False)),
+        "browser_mic": bool(voice_cfg.get("browser_wake", True)),
         "providers": voice_providers,
     }
     return data
@@ -159,7 +276,7 @@ async def _build_state() -> dict[str, Any]:
 def _on_gateway_event(source: str, event: dict[str, Any]) -> None:
     LIVE_EVENTS.push(source, event)
     summary = LIVE_EVENTS.get_recent(1)
-    if summary:
+    if summary and _is_live():
         ALPHA.memory.add_turn("gateway", f"[{source}] {summary[0]['summary']}")
     if _active_runtime == "openclaw" and source == "openclaw":
         asyncio.create_task(_refresh_openclaw_on_event())
@@ -195,9 +312,20 @@ def _start_event_streams() -> None:
     _stream_tasks.append(asyncio.create_task(_hermes_event_stream()))
 
 
+async def _stop_voice_loop() -> None:
+    global _voice_loop
+    if _voice_loop:
+        try:
+            await _voice_loop.stop()
+        except Exception:
+            pass
+        _voice_loop = None
+
+
 async def _start_voice_loop() -> None:
     global _voice_loop
-    if not get("voice.enabled", False):
+    voice_cfg = load_voice_config()
+    if not voice_cfg.get("server_wake", False):
         return
     try:
         from alpha_os.voice import VoiceLoop
@@ -207,12 +335,17 @@ async def _start_voice_loop() -> None:
             LIVE_EVENTS.push("voice", {"type": "transcript", "text": text, "reply": reply})
 
         _voice_loop = VoiceLoop(
-            wake_word=str(get("voice.wake_word", "hey alpha")),
+            wake_word=str(voice_cfg.get("wake_word", "hey alpha")),
             on_transcript=on_transcript,
         )
         await _voice_loop.start()
     except Exception as e:
         logger.warning("Voice loop unavailable: %s", e)
+
+
+async def _restart_voice_loop() -> None:
+    await _stop_voice_loop()
+    await _start_voice_loop()
 
 
 @asynccontextmanager
@@ -226,8 +359,7 @@ async def lifespan(app: FastAPI):
     yield
     for task in _stream_tasks:
         task.cancel()
-    if _voice_loop:
-        await _voice_loop.stop()
+    await _stop_voice_loop()
     await HERMES_BRIDGE.disconnect()
     await OPENCLAW_BRIDGE.disconnect()
     if hasattr(ALPHA.memory, "close"):
@@ -245,6 +377,19 @@ async def _tailscale_loop():
 
 
 app = FastAPI(title="Alpha OS", version="0.1.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:3000",
+        "http://localhost:3000",
+        "http://127.0.0.1:8080",
+        "http://localhost:8080",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.middleware("http")
@@ -277,7 +422,21 @@ class ConfigRequest(BaseModel):
 
 class VoiceConfigRequest(BaseModel):
     wake_word: Optional[str] = None
-    enabled: Optional[bool] = None
+    browser_wake: Optional[bool] = None
+    server_wake: Optional[bool] = None
+    enabled: Optional[bool] = None  # alias for server_wake
+    grok_oauth: Optional[bool] = None
+    record_key: Optional[str] = None
+    max_recording_seconds: Optional[int] = None
+    auto_tts: Optional[bool] = None
+    beep_enabled: Optional[bool] = None
+    silence_threshold: Optional[int] = None
+    silence_duration: Optional[float] = None
+    stt_enabled: Optional[bool] = None
+    stt_provider: Optional[str] = None
+    stt_model: Optional[str] = None
+    tts_provider: Optional[str] = None
+    tts_voice: Optional[str] = None
     provider_id: Optional[str] = None
     provider_enabled: Optional[bool] = None
 
@@ -301,7 +460,8 @@ async def api_command(req: CommandRequest):
     if not cmd:
         return {"reply": "At your service, sir.", "ok": True, "relayed": False}
 
-    ALPHA.memory.add_turn("user", cmd)
+    if _is_live():
+        ALPHA.memory.add_turn("user", cmd)
     relayed: dict[str, Any] | None = None
     if _active_runtime == "hermes" and HERMES_BRIDGE._connected:
         relayed = await HERMES_BRIDGE.send_command(cmd)
@@ -321,8 +481,9 @@ async def api_command(req: CommandRequest):
         reply = ALPHA.generate_reply(cmd)
         ok = True
 
-    ALPHA.memory.add_turn("alpha", reply)
-    LIVE_EVENTS.push("command", {"type": "command", "text": cmd, "reply": reply[:120]})
+    if _is_live():
+        ALPHA.memory.add_turn("alpha", reply)
+        LIVE_EVENTS.push("command", {"type": "command", "text": cmd, "reply": reply[:120]})
     return {
         "reply": reply,
         "ok": ok,
@@ -335,38 +496,81 @@ async def api_greet():
     return {"greeting": ALPHA.get_dashboard_state()["greeting"]}
 
 
+def _voice_request_payload(req: VoiceConfigRequest) -> dict[str, Any]:
+    data = req.model_dump(exclude_none=True)
+    if req.enabled is not None and "server_wake" not in data:
+        data["server_wake"] = req.enabled
+    return data
+
+
+@app.get("/api/voice/config")
+async def voice_config_get():
+    from alpha_os.voice import get_voice_providers
+
+    voice_cfg = load_voice_config()
+    return {
+        "ok": True,
+        "voice": {
+            **voice_cfg,
+            "enabled": bool(voice_cfg.get("server_wake", False)),
+            "providers": get_voice_providers(
+                hermes_connected=HERMES_BRIDGE._connected,
+                openclaw_connected=OPENCLAW_BRIDGE._connected,
+                runtime=_active_runtime,
+            ),
+        },
+    }
+
+
 @app.post("/api/voice/config")
 async def voice_config_post(req: VoiceConfigRequest):
-    if req.wake_word is not None:
-        set_key("voice.wake_word", req.wake_word.strip() or "hey alpha")
-    if req.enabled is not None:
-        set_key("voice.enabled", req.enabled)
-    if req.provider_id and req.provider_enabled is not None:
-        set_key(f"voice.providers.{req.provider_id}", req.provider_enabled)
+    voice_cfg = apply_voice_config(_voice_request_payload(req))
+    await _restart_voice_loop()
     from alpha_os.voice import get_voice_providers
     return {
         "ok": True,
         "voice": {
-            "enabled": bool(get("voice.enabled", False)),
-            "wake_word": str(get("voice.wake_word", "hey alpha")),
-            "providers": get_voice_providers(),
+            **voice_cfg,
+            "enabled": bool(voice_cfg.get("server_wake", False)),
+            "providers": get_voice_providers(
+                hermes_connected=HERMES_BRIDGE._connected,
+                openclaw_connected=OPENCLAW_BRIDGE._connected,
+                runtime=_active_runtime,
+            ),
         },
     }
 
 
 @app.get("/api/voice/status")
 async def voice_status():
+    voice_cfg = load_voice_config()
     try:
         from alpha_os.voice import get_voice_providers, voice_available
+        from alpha_os.voice.grok_oauth import grok_via_runtime_oauth
+
         available = voice_available()
-        providers = get_voice_providers()
+        providers = get_voice_providers(
+            hermes_connected=HERMES_BRIDGE._connected,
+            openclaw_connected=OPENCLAW_BRIDGE._connected,
+            runtime=_active_runtime,
+        )
+        grok_oauth = grok_via_runtime_oauth(
+            hermes_connected=HERMES_BRIDGE._connected,
+            openclaw_connected=OPENCLAW_BRIDGE._connected,
+            runtime=_active_runtime,
+        )
     except Exception:
         available = False
         providers = []
+        grok_oauth = False
     return {
-        "server_voice": available and bool(get("voice.enabled", False)),
-        "browser_voice": True,
-        "wake_word": str(get("voice.wake_word", "hey alpha")),
+        "server_voice": available and bool(voice_cfg.get("server_wake", False)),
+        "browser_voice": bool(voice_cfg.get("browser_wake", True)),
+        "wake_word": str(voice_cfg.get("wake_word", "hey alpha")),
+        "wake_word_engine": "phrase",
+        "grok_oauth": grok_oauth and bool(voice_cfg.get("grok_oauth", True)),
+        "voice_via": "hermes_grok_oauth",
+        "hermes_config": voice_cfg.get("hermes_config_path"),
         "providers": providers,
     }
 
@@ -402,6 +606,24 @@ async def api_config_get():
     return load_config()
 
 
+def _sync_hermes_gateway_env(url: str, api_key: str) -> None:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url.strip())
+    if not parsed.hostname:
+        return
+    env_updates: dict[str, str] = {
+        "HERMES_GATEWAY_URL": url.rstrip("/"),
+        "API_SERVER_HOST": parsed.hostname,
+    }
+    if parsed.port:
+        env_updates["API_SERVER_PORT"] = str(parsed.port)
+    if api_key:
+        env_updates["API_SERVER_KEY"] = api_key
+        env_updates["HERMES_API_KEY"] = api_key
+    set_hermes_env(env_updates)
+
+
 @app.post("/api/config")
 async def api_config_post(req: ConfigRequest):
     if req.runtime:
@@ -414,6 +636,11 @@ async def api_config_post(req: ConfigRequest):
         set_key("openclaw.ws_url", req.openclaw_ws_url)
     if req.openclaw_token:
         set_key("openclaw.token", req.openclaw_token)
+    if req.hermes_gateway_url:
+        _sync_hermes_gateway_env(
+            req.hermes_gateway_url,
+            req.hermes_api_key or str(get("hermes.api_key", "")),
+        )
     await _init_bridges()
     return {"ok": True, "config": load_config()}
 

@@ -197,7 +197,11 @@
       </div>
       <div>
         <div class="section-title mb-2">MCP</div>
-        <p class="text-xs text-slate-500">Add servers at <code class="text-cyan-700">~/.alpha-os/mcp.json</code> (Cursor format).</p>
+        <p class="text-xs text-slate-500 leading-relaxed">Stdio MCP from runtime configs:</p>
+        <ul class="text-[10px] font-mono text-slate-600 mt-2 space-y-1">
+          <li><code class="text-cyan-700">~/.hermes/config.yaml</code> → mcp_servers</li>
+          <li><code class="text-cyan-700">~/.openclaw/openclaw.json</code> → mcp.servers</li>
+        </ul>
       </div>
       <div>
         <div class="section-title mb-2">Runtime</div>
@@ -253,10 +257,15 @@ function renderBadges(data) {
 
 function renderAgents(state) {
   const wrap = document.getElementById("agent-orbs");
+  if (!state.live) {
+    document.getElementById("active-agents-count").textContent = "0";
+    wrap.innerHTML = "";
+    return;
+  }
   const agents = state.agents || [];
   document.getElementById("active-agents-count").textContent = agents.length;
   if (!agents.length) {
-    wrap.innerHTML = '<div class="text-slate-600 text-xs italic">No agents discovered</div>';
+    wrap.innerHTML = "";
     return;
   }
   wrap.innerHTML = agents.map(a => `
@@ -270,6 +279,12 @@ function renderAgents(state) {
 }
 
 function renderMetrics(data) {
+  const bar = document.getElementById("metrics-bar");
+  if (!data.live) {
+    bar.classList.add("hidden");
+    return;
+  }
+  bar.classList.remove("hidden");
   const m = data.metrics || {};
   const set = (id, v) => document.getElementById(id).textContent = v ?? "—";
   set("m-sessions", m.sessions);
@@ -324,14 +339,14 @@ function renderMcp(mcp) {
   const el = document.getElementById("mcp-servers");
   const servers = mcp.servers || [];
   if (!servers.length) {
-    el.innerHTML = `<div class="italic text-slate-600">${mcp.error || "No MCP servers configured"}</div>`;
+    el.innerHTML = `<div class="text-[10px] text-slate-600 leading-relaxed">${mcp.error || "No stdio MCP — add mcp_servers to ~/.hermes/config.yaml"}</div>`;
     return;
   }
   el.innerHTML = servers.map(s => `
     <div class="px-2 py-2 rounded-lg bg-[#050508] border border-slate-800">
       <div class="flex justify-between">
         <span class="text-slate-300">${s.name}</span>
-        <span class="${s.connected ? "text-emerald-400" : "text-amber-400"}">${s.connected ? "●" : "○"} ${s.tool_count || 0} tools</span>
+        <span class="${s.connected ? "text-emerald-400" : "text-amber-400"}">${s.connected ? "●" : "○"} stdio · ${s.tool_count || 0} tools</span>
       </div>
       ${s.error && !s.connected ? `<div class="text-[10px] text-slate-600 truncate mt-1">${s.error}</div>` : ""}
     </div>
@@ -370,19 +385,26 @@ function renderIntegrations(int) {
 }
 
 function renderBoards(data) {
+  const empty = '<div class="text-slate-700">—</div>';
+  if (!data.live) {
+    document.getElementById("board-sessions").innerHTML = "";
+    document.getElementById("board-integrations").innerHTML = "";
+    document.getElementById("board-activity").innerHTML = "";
+    return;
+  }
   const int = data.integrations || {};
   const sess = int.sessions || [];
   document.getElementById("board-sessions").innerHTML = sess.length
     ? sess.slice(0, 5).map(s => `<div class="truncate">${s.id || s.title || s.model || "session"}</div>`).join("")
-    : '<div class="italic text-slate-600">No sessions</div>';
+    : empty;
   const ts = int.toolsets || [];
   document.getElementById("board-integrations").innerHTML = ts.length
     ? ts.slice(0, 5).map(t => `<div>${t.name || t.label}</div>`).join("")
-    : '<div class="italic text-slate-600">Offline</div>';
+    : empty;
   const recent = data.memory?.recent || [];
   document.getElementById("board-activity").innerHTML = recent.length
     ? recent.map(r => `<div><span class="text-cyan-600">${r.who}</span> ${r.text?.slice(0,60)}</div>`).join("")
-    : '<div class="italic text-slate-600">No activity yet</div>';
+    : empty;
 }
 
 function renderLiveEvents(data) {
@@ -402,7 +424,19 @@ function renderLiveEvents(data) {
 
 function applyState(data) {
   currentState = data;
+  const live = !!data.live;
+  const main = document.getElementById("main-grid");
+  if (main) main.classList.toggle("hidden", !live);
   renderBadges(data);
+  if (!live) {
+    document.getElementById("greeting").textContent = "";
+    renderMetrics(data);
+    if (!sessionStorage.getItem("onboarding-dismissed")) {
+      document.getElementById("onboarding").classList.remove("hidden");
+    }
+    return;
+  }
+  document.getElementById("onboarding").classList.add("hidden");
   renderAgents(data);
   renderMetrics(data);
   renderTailscale(data.tailscale);
@@ -418,10 +452,6 @@ function applyState(data) {
   }
   renderVoiceProviders(data.voice_config?.providers);
   if (data.greeting) document.getElementById("greeting").textContent = data.greeting;
-  const offline = !data.hermes_connected && !data.openclaw_connected;
-  if (offline && !sessionStorage.getItem("onboarding-dismissed")) {
-    document.getElementById("onboarding").classList.remove("hidden");
-  }
 }
 
 async function refreshState() {
