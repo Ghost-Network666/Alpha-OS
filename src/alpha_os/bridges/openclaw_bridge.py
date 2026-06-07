@@ -205,6 +205,44 @@ class OpenClawBridge:
             "error": None if self._connected else "OpenClaw gateway not connected",
         }
 
+    async def voicewake_get(self) -> dict[str, Any] | None:
+        result = await self._rpc("voicewake.get")
+        if isinstance(result, dict) and isinstance(result.get("triggers"), list):
+            return result
+        return None
+
+    async def voicewake_set(self, triggers: list[str]) -> dict[str, Any] | None:
+        cleaned = [str(t).strip() for t in triggers if str(t).strip()]
+        result = await self._rpc("voicewake.set", {"triggers": cleaned})
+        if isinstance(result, dict) and isinstance(result.get("triggers"), list):
+            return result
+        return None
+
+    def voicewake_set_sync(self, triggers: list[str]) -> dict[str, Any]:
+        """Sync wrapper for apply_voice_config callers without an event loop."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self._voicewake_set_result(triggers))
+        if loop.is_running():
+            fut = asyncio.run_coroutine_threadsafe(
+                self._voicewake_set_result(triggers),
+                loop,
+            )
+            try:
+                return fut.result(timeout=12)
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)[:200]}
+        return loop.run_until_complete(self._voicewake_set_result(triggers))
+
+    async def _voicewake_set_result(self, triggers: list[str]) -> dict[str, Any]:
+        if not self._connected:
+            return {"ok": False, "error": "OpenClaw gateway offline"}
+        result = await self.voicewake_set(triggers)
+        if result:
+            return {"ok": True, "triggers": result.get("triggers", [])}
+        return {"ok": False, "error": "voicewake.set unavailable"}
+
     async def send_command(self, text: str) -> dict[str, Any]:
         if not self._connected or not self._ws:
             return {"ok": False, "error": "OpenClaw gateway offline"}

@@ -66,3 +66,24 @@ export async function postVoiceConfig(body: VoiceConfigPayload) {
   });
   return res.json();
 }
+
+export async function fetchTtsAudio(
+  text: string,
+  provider?: string,
+  voice?: string
+): Promise<Blob | null> {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  const res = await fetch(`${API_BASE}/api/voice/tts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: trimmed, provider, voice }),
+  });
+
+  const ctype = res.headers.get("content-type") ?? "";
+  if (res.ok && ctype.startsWith("audio/")) {
+    return res.blob();
+  }
+  return null;
+}

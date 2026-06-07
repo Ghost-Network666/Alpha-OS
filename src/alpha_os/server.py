@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -455,6 +455,12 @@ class ConfigRequest(BaseModel):
     openclaw_token: Optional[str] = None
 
 
+class TtsRequest(BaseModel):
+    text: str
+    provider: Optional[str] = None
+    voice: Optional[str] = None
+
+
 class VoiceConfigRequest(BaseModel):
     wake_word: Optional[str] = None
     browser_wake: Optional[bool] = None
@@ -559,7 +565,40 @@ async def voice_config_get():
 
 @app.post("/api/voice/config")
 async def voice_config_post(req: VoiceConfigRequest):
-    voice_cfg = apply_voice_config(_voice_request_payload(req))
+    payload = _voice_request_payload(req)
+    voice_cfg = apply_voice_config(payload)
+    reload_result: dict[str, Any] | None = None
+    voicewake_result: dict[str, Any] | None = None
+
+    from alpha_os.voice.hermes_reload import reload_hermes_gateway
+
+    reload_result = await reload_hermes_gateway(
+        HERMES_BRIDGE.gateway_url,
+        hermes_connected=HERMES_BRIDGE._connected,
+    )
+
+    if payload.get("wake_word") is not None:
+        from alpha_os.bridges.detector import openclaw_installed
+        from alpha_os.voice.openclaw_voicewake import (
+            voicewake_path,
+            wake_word_to_triggers,
+        )
+
+        triggers = wake_word_to_triggers(str(payload["wake_word"]).strip())
+        voicewake_result = {
+            "ok": True,
+            "triggers": triggers,
+            "path": str(voicewake_path()),
+            "file_written": openclaw_installed(),
+        }
+        if OPENCLAW_BRIDGE._connected:
+            rpc = await OPENCLAW_BRIDGE.voicewake_set(triggers)
+            voicewake_result["rpc"] = (
+                {"ok": True, "triggers": rpc.get("triggers", [])}
+                if rpc
+                else {"ok": False, "error": "voicewake.set unavailable"}
+            )
+
     await _restart_voice_loop()
     from alpha_os.voice import get_voice_providers
     return {
@@ -573,7 +612,37 @@ async def voice_config_post(req: VoiceConfigRequest):
                 runtime=_active_runtime,
             ),
         },
+        "hermes_reload": reload_result,
+        "openclaw_voicewake": voicewake_result,
     }
+
+
+@app.post("/api/voice/tts")
+async def voice_tts_post(req: TtsRequest):
+    from alpha_os.voice.tts_stream import synthesize_tts
+
+    result = await synthesize_tts(
+        req.text,
+        provider=req.provider,
+        voice=req.voice,
+        hermes_gateway_url=HERMES_BRIDGE.gateway_url,
+        hermes_connected=HERMES_BRIDGE._connected,
+    )
+    if not result or not result.audio:
+        return {
+            "ok": False,
+            "error": "TTS unavailable — install edge-tts or connect Hermes gateway",
+        }
+    return Response(
+        content=result.audio,
+        media_type=result.content_type,
+        headers={"X-Alpha-TTS-Provider": result.provider},
+    )
+
+
+@app.get("/api/voice/tts")
+async def voice_tts_get(text: str, provider: Optional[str] = None, voice: Optional[str] = None):
+    return await voice_tts_post(TtsRequest(text=text, provider=provider, voice=voice))
 
 
 @app.get("/api/voice/status")

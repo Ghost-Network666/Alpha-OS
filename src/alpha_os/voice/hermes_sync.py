@@ -56,6 +56,14 @@ def _tts_block(cfg: dict[str, Any]) -> dict[str, Any]:
 def load_voice_config() -> dict[str, Any]:
     """Effective voice config: Hermes yaml + Alpha OS overrides."""
     out = dict(VOICE_DEFAULTS)
+    try:
+        from alpha_os.voice.openclaw_voicewake import load_wake_word_from_openclaw
+
+        oc_wake = load_wake_word_from_openclaw(out["wake_word"])
+        if oc_wake:
+            out["wake_word"] = oc_wake
+    except Exception:
+        pass
     hermes = read_hermes_config()
     alpha = _alpha_os_block(hermes)
     voice = _voice_block(hermes)
@@ -175,4 +183,13 @@ def apply_voice_config(updates: dict[str, Any]) -> dict[str, Any]:
         cfg["tts"] = tts
 
     write_hermes_config(cfg)
+
+    if updates.get("wake_word") is not None:
+        try:
+            from alpha_os.voice.openclaw_voicewake import write_voicewake, wake_word_to_triggers
+
+            write_voicewake(wake_word_to_triggers(str(updates["wake_word"]).strip() or DEFAULT_WAKE))
+        except Exception:
+            pass
+
     return load_voice_config()

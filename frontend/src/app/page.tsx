@@ -27,13 +27,14 @@ export default function DashboardPage() {
   const browserWake = state.voice_config?.browser_wake ?? true;
   const autoTts = state.voice_config?.auto_tts ?? true;
   const ttsVoice = state.voice_config?.tts_voice ?? "en-US-AriaNeural";
+  const ttsProvider = state.voice_config?.tts_provider ?? "edge";
 
   const speakReply = useCallback(
     (reply: string) => {
       if (!autoTts) return;
-      speakAlphaReply(reply, ttsVoice);
+      void speakAlphaReply(reply, ttsVoice, ttsProvider);
     },
-    [autoTts, ttsVoice]
+    [autoTts, ttsVoice, ttsProvider]
   );
 
   const onLog = useCallback(

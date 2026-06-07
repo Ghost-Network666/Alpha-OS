@@ -1,6 +1,9 @@
-/** Browser TTS for Alpha replies via window.speechSynthesis. */
+/** Alpha reply speech — server TTS stream with browser synthesis fallback. */
+
+import { fetchTtsAudio } from "@/lib/api";
 
 let voicesReady = false;
+let activeAudio: HTMLAudioElement | null = null;
 
 function ensureVoicesLoaded(): void {
   if (typeof window === "undefined" || !window.speechSynthesis) return;
@@ -47,7 +50,7 @@ function pickVoice(voiceHint?: string): SpeechSynthesisVoice | null {
   );
 }
 
-function speakNow(text: string, voiceHint?: string): void {
+function speakBrowser(text: string, voiceHint?: string): void {
   if (typeof window === "undefined" || !window.speechSynthesis) return;
 
   window.speechSynthesis.cancel();
@@ -61,28 +64,81 @@ function speakNow(text: string, voiceHint?: string): void {
   window.speechSynthesis.speak(utterance);
 }
 
-export function speakAlphaReply(text: string, voiceHint?: string): void {
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
+async function playAudioBlob(blob: Blob): Promise<boolean> {
+  if (typeof window === "undefined") return false;
+
+  stopAlphaSpeech();
+
+  const url = URL.createObjectURL(blob);
+  const audio = new Audio(url);
+  activeAudio = audio;
+
+  return new Promise((resolve) => {
+    const cleanup = () => {
+      URL.revokeObjectURL(url);
+      if (activeAudio === audio) activeAudio = null;
+    };
+    audio.onended = () => {
+      cleanup();
+      resolve(true);
+    };
+    audio.onerror = () => {
+      cleanup();
+      resolve(false);
+    };
+    void audio.play().catch(() => {
+      cleanup();
+      resolve(false);
+    });
+  });
+}
+
+export async function speakAlphaReply(
+  text: string,
+  voiceHint?: string,
+  provider?: string
+): Promise<void> {
   const trimmed = text.trim();
-  if (!trimmed) return;
+  if (!trimmed || typeof window === "undefined") return;
+
+  const useServer =
+    provider === "edge" ||
+    provider === "grok" ||
+    provider === "xai" ||
+    !provider;
+
+  if (useServer) {
+    try {
+      const blob = await fetchTtsAudio(trimmed, provider, voiceHint);
+      if (blob) {
+        const played = await playAudioBlob(blob);
+        if (played) return;
+      }
+    } catch {
+      // Fall through to browser TTS.
+    }
+  }
 
   ensureVoicesLoaded();
 
   if (window.speechSynthesis.getVoices().length > 0) {
-    speakNow(trimmed, voiceHint);
+    speakBrowser(trimmed, voiceHint);
     return;
   }
 
-  // Chrome loads voices asynchronously on first use.
   const retry = () => {
     window.speechSynthesis.onvoiceschanged = null;
-    speakNow(trimmed, voiceHint);
+    speakBrowser(trimmed, voiceHint);
   };
   window.speechSynthesis.onvoiceschanged = retry;
   window.speechSynthesis.getVoices();
 }
 
 export function stopAlphaSpeech(): void {
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
-  window.speechSynthesis.cancel();
+  if (typeof window === "undefined") return;
+  if (activeAudio) {
+    activeAudio.pause();
+    activeAudio = null;
+  }
+  window.speechSynthesis?.cancel();
 }
