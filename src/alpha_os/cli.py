@@ -12,9 +12,15 @@ from pathlib import Path
 
 from alpha_os import __version__
 from alpha_os.bridges.detector import detect_best, detect_hermes, detect_openclaw
-from alpha_os.config import CONFIG_DIR, inject_runtime_env, load_config, save_config, set_key
-
-inject_runtime_env()
+from alpha_os.logging_config import setup_logging
+from alpha_os.config import CONFIG_DIR, load_config, save_config, set_key
+from alpha_os.install_config import (
+    apply_configuration,
+    configure_tailscale_serve,
+    export_shell_env,
+    has_frontend,
+    print_access_banner,
+)
 
 def _resolve_pkg_root() -> Path:
     here = Path(__file__).resolve().parent
@@ -25,6 +31,7 @@ def _resolve_pkg_root() -> Path:
 
 
 PKG_ROOT = _resolve_pkg_root()
+setup_logging(pkg_root=PKG_ROOT)
 HERMES_PLUGIN_SRC = PKG_ROOT / "hermes_plugin"
 THEME_SRC = PKG_ROOT / "hermes_plugin" / "dashboard" / "alpha-os-cyber.yaml"
 
@@ -106,13 +113,57 @@ def _install_openclaw_plugin() -> bool:
     return False
 
 
+def cmd_configure(args: argparse.Namespace) -> int:
+    include_frontend = has_frontend(PKG_ROOT) and not getattr(args, "no_frontend", False)
+    urls = apply_configuration(
+        host=args.host,
+        backend_port=args.port,
+        frontend_port=args.frontend_port,
+        include_frontend=include_frontend,
+        pkg_root=PKG_ROOT,
+    )
+    if getattr(args, "export", False):
+        _print(export_shell_env(urls, pkg_root=PKG_ROOT))
+        return 0
+    if getattr(args, "tailscale_serve", False):
+        https_url = configure_tailscale_serve(
+            frontend_port=urls.get("frontend_port"),
+            backend_port=urls.get("backend_port"),
+            pkg_root=PKG_ROOT,
+        )
+        if https_url:
+            urls["tailscale_https_url"] = https_url
+            urls["access_url"] = https_url
+            from alpha_os.install_config import write_frontend_env
+
+            write_frontend_env(
+                PKG_ROOT,
+                urls["backend_url"],
+                urls["backend_port"],
+                https_url,
+            )
+    if not getattr(args, "quiet", False):
+        print_access_banner(urls, include_frontend=include_frontend)
+    return 0
+
+
 async def cmd_setup(args: argparse.Namespace) -> int:
     _print(f"Alpha OS v{__version__} setup\n")
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
+    from alpha_os.runtime_sync import sync_runtime_config
+
+    synced = await sync_runtime_config(sync_voice=False)
     hermes = await detect_hermes()
     openclaw = await detect_openclaw()
     best = await detect_best()
+    _print(f"  Hermes home:    {'~/.hermes' if Path.home().joinpath('.hermes').exists() else 'not found'}")
+    if synced.get("hermes_profile"):
+        _print(f"  Hermes profile: {synced['hermes_profile']}")
+    if synced.get("hermes_gateway_url"):
+        _print(f"  Hermes API:     {synced['hermes_gateway_url']} ({'live' if synced.get('hermes_connected') else 'offline'})")
+    if synced.get("openclaw_ws_url"):
+        _print(f"  OpenClaw GW:    {synced['openclaw_ws_url']} ({'live' if synced.get('openclaw_connected') else 'offline'})")
 
     cfg: dict = load_config()
     runtime = args.runtime or best.name
@@ -139,42 +190,50 @@ async def cmd_setup(args: argparse.Namespace) -> int:
         _install_openclaw_plugin()
 
     save_config(cfg)
+
+    if hermes.gateway_url or runtime == "hermes":
+        try:
+            from alpha_os.voice.hermes_sync import (
+                ensure_hermes_alpha_os_block,
+                load_voice_config,
+                sync_voice_to_alpha_os,
+            )
+
+            ensure_hermes_alpha_os_block()
+            voice = sync_voice_to_alpha_os()
+            _print(f"  Hermes profile: {voice.get('hermes_profile', 'default')}")
+            _print(f"  Hermes config:  {voice.get('hermes_config_path', '')}")
+            if voice.get("model_provider"):
+                _print(f"  Model:          {voice.get('model_default')} ({voice['model_provider']})")
+            _print(
+                f"  Voice/TTS:      {voice.get('tts_provider')} / {voice.get('tts_voice')}"
+                + (" (SuperGrok)" if voice.get("tts_provider") == "xai" else "")
+            )
+            _print(f"  STT:            {voice.get('stt_provider')} / {voice.get('stt_model')}")
+        except Exception as exc:
+            _print(f"  Voice sync:     skipped ({exc})")
+
     _print(f"\n  Runtime:  {runtime}")
     _print(f"  Config:   {CONFIG_DIR / 'config.yaml'}")
-    _print("\n  Next steps:")
-    if runtime == "hermes":
-        _print("    hermes gateway          # start API server if needed")
-        _print("    hermes dashboard        # Alpha OS replaces home page")
-        _print("    — or —")
-    _print(f"    alpha-os serve          # http://{args.host}:{args.port}")
     return 0
 
 
-def _run_start_script(name: str) -> int:
-    start_sh = PKG_ROOT / "scripts" / name
+def cmd_start(args: argparse.Namespace) -> int:
+    start_sh = PKG_ROOT / "scripts" / "start.sh"
     if not start_sh.exists():
-        _print(f"  scripts/{name} not found — are you running from a repo clone?")
+        _print("  scripts/start.sh not found — are you running from a repo clone?")
         _print("  Clone: git clone https://github.com/Ghost-Network666/Alpha-OS.git")
         _print("  Then:  ./install.sh && ./scripts/start.sh")
         return 1
     if not (PKG_ROOT / "frontend" / "node_modules").exists():
         _print("  Frontend not installed. Run: ./install.sh")
         return 1
+    _print("Starting Alpha OS (backend + frontend)…")
     try:
         subprocess.run(["bash", str(start_sh)], cwd=str(PKG_ROOT), check=False)
     except KeyboardInterrupt:
         pass
     return 0
-
-
-def cmd_start(_args: argparse.Namespace) -> int:
-    _print("Starting Alpha OS (dev — hot reload)…")
-    return _run_start_script("start.sh")
-
-
-def cmd_start_prod(_args: argparse.Namespace) -> int:
-    _print("Starting Alpha OS (production build)…")
-    return _run_start_script("start-prod.sh")
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
@@ -205,6 +264,19 @@ def main() -> None:
     p_setup.add_argument("--port", type=int, default=8080)
     p_setup.add_argument("--host", default="127.0.0.1")
 
+    p_configure = sub.add_parser("configure", help="Write config and print access URL")
+    p_configure.add_argument("--port", type=int, default=None)
+    p_configure.add_argument("--frontend-port", type=int, default=None)
+    p_configure.add_argument("--host", default=None)
+    p_configure.add_argument("--no-frontend", action="store_true", help="Backend-only install")
+    p_configure.add_argument("--export", action="store_true", help="Print shell exports for scripts")
+    p_configure.add_argument("--quiet", action="store_true", help="Skip access URL banner")
+    p_configure.add_argument(
+        "--tailscale-serve",
+        action="store_true",
+        help="Expose via Tailscale HTTPS (tailnet only, enables browser mic)",
+    )
+
     p_serve = sub.add_parser("serve", help="Start Alpha OS web server")
     p_serve.add_argument("--port", type=int, default=8080)
     p_serve.add_argument("--host", default="127.0.0.1")
@@ -217,21 +289,19 @@ def main() -> None:
 
     sub.add_parser("doctor", help="Check gateway connectivity")
 
-    sub.add_parser("start", help="Start backend + Next.js frontend (dev mode)")
-
-    sub.add_parser("start-prod", help="Start backend + built Next.js frontend (production)")
+    sub.add_parser("start", help="Start backend + Next.js frontend (repo clone)")
 
     args = parser.parse_args()
     if args.cmd == "setup":
         raise SystemExit(asyncio.run(cmd_setup(args)))
+    if args.cmd == "configure":
+        raise SystemExit(cmd_configure(args))
     if args.cmd == "doctor":
         raise SystemExit(asyncio.run(cmd_doctor()))
     if args.cmd == "serve":
         raise SystemExit(cmd_serve(args))
     if args.cmd == "start":
         raise SystemExit(cmd_start(args))
-    if args.cmd == "start-prod":
-        raise SystemExit(cmd_start_prod(args))
 
     # Default: serve
     raise SystemExit(cmd_serve(argparse.Namespace(port=8080, host="127.0.0.1", open=True, voice=False)))

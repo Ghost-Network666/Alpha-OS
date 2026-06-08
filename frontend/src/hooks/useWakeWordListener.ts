@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { clientLog } from "@/lib/client-log";
+import { micBlockedReason } from "@/lib/secure-context";
 import { hasWakeWord, stripWakeWord } from "@/lib/wakeword";
 
 export type WakeWordStatus =
@@ -14,6 +16,7 @@ export type WakeWordStatus =
 interface UseWakeWordListenerOptions {
   enabled: boolean;
   wakeWord?: string;
+  tailscaleHttpsUrl?: string | null;
   onWake?: () => void;
   onCommand: (command: string) => void | Promise<void>;
   onStatus?: (status: WakeWordStatus, detail?: string) => void;
@@ -24,11 +27,13 @@ const DEFAULT_WAKE = "hey alpha";
 export function useWakeWordListener({
   enabled,
   wakeWord = DEFAULT_WAKE,
+  tailscaleHttpsUrl,
   onWake,
   onCommand,
   onStatus,
 }: UseWakeWordListenerOptions) {
   const [status, setStatus] = useState<WakeWordStatus>("idle");
+  const [detail, setDetail] = useState<string | undefined>();
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const armedRef = useRef(false);
   const onCommandRef = useRef(onCommand);
@@ -41,9 +46,10 @@ export function useWakeWordListener({
     onStatusRef.current = onStatus;
   }, [onCommand, onWake, onStatus]);
 
-  const setWakeStatus = useCallback((next: WakeWordStatus, detail?: string) => {
+  const setWakeStatus = useCallback((next: WakeWordStatus, msg?: string) => {
     setStatus(next);
-    onStatusRef.current?.(next, detail);
+    setDetail(msg);
+    onStatusRef.current?.(next, msg);
   }, []);
 
   const stopRecognition = useCallback(() => {
@@ -69,6 +75,12 @@ export function useWakeWordListener({
       setWakeStatus("idle");
       armedRef.current = false;
       stopRecognition();
+      return;
+    }
+
+    const blocked = micBlockedReason(tailscaleHttpsUrl);
+    if (blocked) {
+      setWakeStatus("error", "Voice needs HTTPS — use the secure link above");
       return;
     }
 
@@ -130,11 +142,15 @@ export function useWakeWordListener({
         if (cancelled) return;
         const code = (ev as { error?: string }).error;
         if (code === "not-allowed") {
-          setWakeStatus("error", "Microphone permission denied");
+          const msg = "Microphone permission denied";
+          clientLog("warning", msg, code, "wake");
+          setWakeStatus("error", msg);
           return;
         }
         if (code !== "aborted" && code !== "no-speech") {
-          setWakeStatus("error", code ?? "Speech recognition error");
+          const msg = code ?? "Speech recognition error";
+          clientLog("warning", "Speech recognition error", msg, "wake");
+          setWakeStatus("error", msg);
         }
       };
 
@@ -149,10 +165,10 @@ export function useWakeWordListener({
         rec.start();
         setWakeStatus("listening");
       } catch (err) {
-        setWakeStatus(
-          "error",
-          err instanceof Error ? err.message : "Failed to start speech recognition"
-        );
+        const msg =
+          err instanceof Error ? err.message : "Failed to start speech recognition";
+        clientLog("error", "Failed to start speech recognition", msg, "wake");
+        setWakeStatus("error", msg);
       }
     };
 
@@ -163,7 +179,7 @@ export function useWakeWordListener({
       armedRef.current = false;
       stopRecognition();
     };
-  }, [enabled, wakeWord, setWakeStatus, stopRecognition]);
+  }, [enabled, wakeWord, tailscaleHttpsUrl, setWakeStatus, stopRecognition]);
 
-  return { status };
+  return { status, detail };
 }

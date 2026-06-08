@@ -56,13 +56,11 @@ pip_install install --user "git+https://github.com/Ghost-Network666/Alpha-OS.git
 echo "▸ Running setup…"
 alpha-os setup || true
 
-echo ""
-echo "  Backend installed."
+echo "▸ Configuring access URLs…"
+alpha-os configure --no-frontend
+
 echo ""
 echo "  For the full Next.js UI, clone the repo:"
 echo "    git clone https://github.com/Ghost-Network666/Alpha-OS.git"
-echo "    cd Alpha-OS && ./install.sh && ./scripts/start.sh"
-echo ""
-echo "  Backend only:"
-echo "    alpha-os serve    → http://127.0.0.1:8080"
+echo "    cd Alpha-OS && ./install.sh"
 echo ""

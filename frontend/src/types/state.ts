@@ -1,4 +1,15 @@
 export interface AgentCard {
+  id?: string;
+  name: string;
+  title?: string;
+  status?: string;
+  color?: string;
+  tool_count?: number;
+}
+
+export interface CapabilityCard {
+  id: string;
+  kind: "toolset" | "skill" | "session" | "agent";
   name: string;
   title?: string;
   status?: string;
@@ -17,53 +28,77 @@ export interface Metrics {
   sessions: number;
   agents: number;
   tools: number;
-  toolsets?: number;
+  toolsets: number;
   skills: number;
+  plugins?: number;
   events_per_min: number;
-  mcp_servers?: number;
-  mcp_tools?: number;
 }
 
-export interface McpConfigPath {
-  runtime: string;
-  path: string;
-  exists: boolean;
-  key: string;
+export interface PolymarketMetrics {
+  connected: boolean;
+  server?: string;
+  tool_count?: number;
+  pnl_today: number | null;
+  open_positions: number | null;
+  win_rate: number | null;
+}
+
+export interface McpTool {
+  name: string;
+  description?: string;
+  category?: string;
+  human_label?: string;
+  status?: "online" | "offline";
+  issue?: string | null;
+}
+
+export interface McpCategory {
+  name: string;
+  online: number;
+  offline: number;
+  total: number;
+}
+
+export interface McpWidget {
+  id: string;
+  server: string;
+  tool: string;
+  category: string;
+  title: string;
+  summary: string;
+  status: "ok" | "error" | "offline";
+  issue?: string | null;
+  fields: { label: string; value: string }[];
 }
 
 export interface McpServer {
   name: string;
   connected: boolean;
   transport?: string;
-  probeable?: boolean;
   tool_count: number;
-  tools?: { name: string; description?: string }[];
+  tools_online?: number;
+  tools_offline?: number;
+  tools?: McpTool[];
+  categories?: McpCategory[];
+  widgets?: McpWidget[];
   error?: string | null;
   command?: string;
-  args?: string[];
-  command_preview?: string;
-  env_keys?: string[];
   source?: string;
-  config_path?: string;
-  url?: string;
-  auth?: string | null;
-  note?: string;
-  status?: string;
-  tool_policy?: { include?: unknown; exclude?: unknown } | null;
 }
 
 export interface McpPanel {
   connected: boolean;
   server_count: number;
-  stdio_count?: number;
-  remote_count?: number;
   tool_count: number;
+  servers_online?: number;
+  servers_offline?: number;
+  tools_online?: number;
+  tools_offline?: number;
   servers: McpServer[];
-  config_paths?: McpConfigPath[];
+  widgets?: McpWidget[];
+  categories?: McpCategory[];
   sources?: string[];
-  runtime?: string;
   error?: string | null;
-  summary?: string | null;
 }
 
 export interface Integrations {
@@ -113,33 +148,26 @@ export interface VoiceConfig {
   tts_voice: string;
   hermes_config_path?: string;
   hermes_config_exists?: boolean;
+  hermes_profile?: string;
+  model_provider?: string;
+  model_default?: string;
   providers: VoiceProvider[];
-}
-
-export interface RuntimeStatus {
-  installed: boolean;
-  connected: boolean;
-  gateway_url?: string;
-  ws_url?: string;
 }
 
 export interface AlphaState {
   agents: AgentCard[];
+  capabilities?: CapabilityCard[];
   greeting: string;
   runtime: string;
-  runtime_preference?: string;
   hermes_installed?: boolean;
-  openclaw_installed?: boolean;
-  runtimes?: {
-    hermes: RuntimeStatus;
-    openclaw: RuntimeStatus;
-  };
   live?: boolean;
+  gateway_online?: boolean;
   hermes_connected: boolean;
   openclaw_connected: boolean;
   hermes?: { connected: boolean; gateway_url?: string };
   openclaw?: { connected: boolean; gateway_url?: string };
   metrics: Metrics;
+  polymarket: PolymarketMetrics;
   live_events: LiveEvent[];
   event_seq: number;
   orb_pulse: boolean;
@@ -148,4 +176,6 @@ export interface AlphaState {
   tailscale: TailscaleStatus;
   memory?: { recent?: { who: string; text: string }[] };
   voice_config?: VoiceConfig;
+  log_path?: string;
+  tailscale_https_url?: string | null;
 }

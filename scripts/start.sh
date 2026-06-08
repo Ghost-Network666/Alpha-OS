@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Start Alpha OS — backend API + Next.js frontend (dev mode)
+# Start Alpha OS — backend API + Next.js frontend
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# shellcheck disable=SC1091
-source "${ROOT}/scripts/lib/runtime-env.sh"
-load_runtime_env
 
-BACKEND_HOST="${ALPHA_OS_HOST:-127.0.0.1}"
-BACKEND_PORT="${ALPHA_OS_PORT:-8080}"
-FRONTEND_HOST="${ALPHA_OS_FRONTEND_HOST:-127.0.0.1}"
-FRONTEND_PORT="${ALPHA_OS_FRONTEND_PORT:-3000}"
+# Runtime selection from install (Hermes profile / OpenClaw home)
+RUNTIME_ENV="${HOME}/.alpha-os/runtime.env"
+if [[ -f "${RUNTIME_ENV}" ]]; then
+  # shellcheck disable=SC1090
+  source "${RUNTIME_ENV}"
+fi
 
+# Python: prefer repo venv
 if [[ -f "${ROOT}/.venv/bin/activate" ]]; then
   # shellcheck disable=SC1091
   source "${ROOT}/.venv/bin/activate"
@@ -19,6 +19,7 @@ elif ! python3 -c "import alpha_os" 2>/dev/null; then
   exit 1
 fi
 
+# Node: load nvm if needed
 export NVM_DIR="${HOME}/.nvm"
 [[ -s "${NVM_DIR}/nvm.sh" ]] && . "${NVM_DIR}/nvm.sh"
 
@@ -31,17 +32,30 @@ if ! command -v node &>/dev/null; then
   echo "Node.js not found. Run: ./install.sh"
   exit 1
 fi
+if ! node -e 'const [m,n]=process.versions.node.split(".").map(Number); process.exit(m>20||(m===20&&n>=9)?0:1)' 2>/dev/null; then
+  echo "Node.js 20.9+ required for Next.js 16. Run: ./install.sh"
+  exit 1
+fi
 
-echo "▸ Alpha OS (dev)"
-echo "  Config       → ~/.hermes/.env + ~/.openclaw/.env"
-echo "  Backend      → http://${BACKEND_HOST}:${BACKEND_PORT}"
-echo "  Frontend     → http://${FRONTEND_HOST}:${FRONTEND_PORT}"
+# Load ports/URLs from install configuration
+eval "$(alpha-os configure --export --quiet 2>/dev/null | grep -E '^export ' || true)"
+BACKEND_PORT="${ALPHA_OS_PORT:-8080}"
+FRONTEND_PORT="${ALPHA_OS_FRONTEND_PORT:-3000}"
+ACCESS_URL="${ALPHA_OS_ACCESS_URL:-http://127.0.0.1:${FRONTEND_PORT}}"
+export ALPHA_OS_LOG="${ALPHA_OS_LOG:-${ROOT}/alpha-os.log}"
+
+echo "▸ Alpha OS (dev mode — use systemd for production)"
+echo "  Access URL → ${ACCESS_URL}"
+echo "  Backend    → http://127.0.0.1:${BACKEND_PORT}"
+echo "  Log file   → ${ALPHA_OS_LOG}"
+echo "  Production → systemctl --user start alpha-os-backend alpha-os-frontend"
+if [[ -n "${ALPHA_OS_TAILSCALE_HTTPS_URL:-}" ]]; then
+  echo "  Mic (HTTPS)→ ${ALPHA_OS_TAILSCALE_HTTPS_URL}/"
+fi
 echo ""
 
 export PYTHONPATH="${ROOT}/src${PYTHONPATH:+:$PYTHONPATH}"
-export ALPHA_OS_HOST="${BACKEND_HOST}"
-export ALPHA_OS_PORT="${BACKEND_PORT}"
-export ALPHA_OS_API_TOKEN="${ALPHA_OS_API_TOKEN:-}"
+export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-http://127.0.0.1:${BACKEND_PORT}}"
 
 cleanup() {
   trap - EXIT INT TERM
@@ -50,9 +64,9 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 python3 -m uvicorn alpha_os.server:app \
-  --host "${BACKEND_HOST}" \
+  --host 127.0.0.1 \
   --port "${BACKEND_PORT}" \
   --reload &
 
 cd "${ROOT}/frontend"
-exec npm run dev -- --port "${FRONTEND_PORT}" --hostname "${FRONTEND_HOST}"
+exec npm run dev -- --port "${FRONTEND_PORT}" --hostname 127.0.0.1

@@ -1,15 +1,21 @@
-"""Sync Alpha OS voice settings with ~/.hermes/config.yaml."""
+"""Sync Alpha OS voice settings with active Hermes profile config."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from alpha_os.config import (
+    active_hermes_profile,
     get,
     hermes_config_path,
+    load_config,
     read_hermes_config,
+    save_config,
+    set_active_hermes_profile,
     set_key,
     write_hermes_config,
+    _read_yaml,
+    HERMES_CONFIG_PATH,
 )
 
 DEFAULT_WAKE = "hey alpha"
@@ -30,6 +36,25 @@ VOICE_DEFAULTS: dict[str, Any] = {
     "tts_provider": "edge",
     "tts_voice": "en-US-AriaNeural",
     "grok_oauth": True,
+}
+
+_TTS_VOICE_KEYS: dict[str, tuple[str, str]] = {
+    "edge": ("edge", "voice"),
+    "xai": ("xai", "voice_id"),
+    "openai": ("openai", "voice"),
+    "elevenlabs": ("elevenlabs", "voice_id"),
+    "mistral": ("mistral", "voice_id"),
+    "piper": ("piper", "voice"),
+    "neutts": ("neutts", "voice"),
+}
+
+_STT_MODEL_KEYS: dict[str, tuple[str, str]] = {
+    "local": ("local", "model"),
+    "openai": ("openai", "model"),
+    "mistral": ("mistral", "model"),
+    "elevenlabs": ("elevenlabs", "model_id"),
+    "groq": ("groq", "model"),
+    "xai": ("xai", "model"),
 }
 
 
@@ -53,22 +78,78 @@ def _tts_block(cfg: dict[str, Any]) -> dict[str, Any]:
     return block if isinstance(block, dict) else {}
 
 
-def load_voice_config() -> dict[str, Any]:
-    """Effective voice config: Hermes yaml + Alpha OS overrides."""
-    out = dict(VOICE_DEFAULTS)
-    try:
-        from alpha_os.voice.openclaw_voicewake import load_wake_word_from_openclaw
+def _model_block(cfg: dict[str, Any]) -> dict[str, Any]:
+    block = cfg.get("model")
+    return block if isinstance(block, dict) else {}
 
-        oc_wake = load_wake_word_from_openclaw(out["wake_word"])
-        if oc_wake:
-            out["wake_word"] = oc_wake
-    except Exception:
-        pass
-    hermes = read_hermes_config()
+
+def _uses_grok_oauth(model: dict[str, Any]) -> bool:
+    provider = str(model.get("provider") or "").lower()
+    default_model = str(model.get("default") or "").lower()
+    return (
+        "xai" in provider
+        or "grok" in provider
+        or default_model.startswith("grok")
+    )
+
+
+def _tts_voice_for_provider(tts: dict[str, Any], provider: str) -> str | None:
+    block_key, voice_key = _TTS_VOICE_KEYS.get(provider, ("edge", "voice"))
+    block = tts.get(block_key)
+    if isinstance(block, dict) and block.get(voice_key):
+        return str(block[voice_key])
+    return None
+
+
+def _stt_model_for_provider(stt: dict[str, Any], provider: str) -> str | None:
+    block_key, model_key = _STT_MODEL_KEYS.get(provider, ("local", "model"))
+    block = stt.get(block_key)
+    if isinstance(block, dict) and block.get(model_key):
+        return str(block[model_key])
+    return None
+
+
+def _resolve_tts(tts: dict[str, Any], model: dict[str, Any]) -> tuple[str, str]:
+    """Pick TTS provider + voice from Hermes config (SuperGrok/xai when on xai-oauth)."""
+    provider = str(tts.get("provider") or "edge").lower().strip()
+    grok_model = _uses_grok_oauth(model)
+    xai_voice = _tts_voice_for_provider(tts, "xai")
+
+    if grok_model and xai_voice:
+        return "xai", xai_voice
+
+    voice = _tts_voice_for_provider(tts, provider)
+    if voice:
+        return provider, voice
+
+    for fallback in ("xai", "edge", "openai", "elevenlabs"):
+        voice = _tts_voice_for_provider(tts, fallback)
+        if voice:
+            return fallback, voice
+
+    return str(VOICE_DEFAULTS["tts_provider"]), str(VOICE_DEFAULTS["tts_voice"])
+
+
+def _merged_hermes_config() -> dict[str, Any]:
+    """Active profile config, with global alpha_os block merged when missing."""
+    cfg = read_hermes_config()
+    global_cfg = _read_yaml(HERMES_CONFIG_PATH)
+    if global_cfg and not _alpha_os_block(cfg) and _alpha_os_block(global_cfg):
+        merged = dict(cfg)
+        merged["alpha_os"] = dict(_alpha_os_block(global_cfg))
+        return merged
+    return cfg
+
+
+def load_voice_config() -> dict[str, Any]:
+    """Effective voice config detected from active Hermes profile."""
+    out = dict(VOICE_DEFAULTS)
+    hermes = _merged_hermes_config()
     alpha = _alpha_os_block(hermes)
     voice = _voice_block(hermes)
     stt = _stt_block(hermes)
     tts = _tts_block(hermes)
+    model = _model_block(hermes)
 
     if alpha.get("wake_word"):
         out["wake_word"] = str(alpha["wake_word"]).strip()
@@ -78,6 +159,8 @@ def load_voice_config() -> dict[str, Any]:
         out["server_wake"] = bool(alpha["server_wake"])
     if "grok_oauth" in alpha:
         out["grok_oauth"] = bool(alpha["grok_oauth"])
+    elif _uses_grok_oauth(model):
+        out["grok_oauth"] = True
 
     for key in (
         "record_key",
@@ -92,37 +175,104 @@ def load_voice_config() -> dict[str, Any]:
 
     if "enabled" in stt:
         out["stt_enabled"] = bool(stt["enabled"])
-    if stt.get("provider"):
-        out["stt_provider"] = str(stt["provider"])
-    local = stt.get("local")
-    if isinstance(local, dict) and local.get("model"):
-        out["stt_model"] = str(local["model"])
+    stt_provider = str(stt.get("provider") or out["stt_provider"]).lower()
+    out["stt_provider"] = stt_provider
+    stt_model = _stt_model_for_provider(stt, stt_provider)
+    if stt_model:
+        out["stt_model"] = stt_model
 
-    if tts.get("provider"):
-        out["tts_provider"] = str(tts["provider"])
-    edge = tts.get("edge")
-    if isinstance(edge, dict) and edge.get("voice"):
-        out["tts_voice"] = str(edge["voice"])
+    tts_provider, tts_voice = _resolve_tts(tts, model)
+    out["tts_provider"] = tts_provider
+    out["tts_voice"] = tts_voice
 
-    # Alpha OS local config overrides when Hermes home is missing
-    if not hermes_config_path().exists():
+    if model.get("default"):
+        out["model_default"] = str(model["default"])
+    if model.get("provider"):
+        out["model_provider"] = str(model["provider"])
+
+    path = hermes_config_path()
+    if not path.exists():
         out["wake_word"] = str(get("voice.wake_word", out["wake_word"]))
         out["server_wake"] = bool(get("voice.enabled", out["server_wake"]))
         out["browser_wake"] = bool(get("voice.browser_wake", out["browser_wake"]))
         out["grok_oauth"] = bool(get("voice.providers.grok_oauth", out["grok_oauth"]))
 
-    out["hermes_config_path"] = str(hermes_config_path())
-    out["hermes_config_exists"] = hermes_config_path().exists()
+    out["hermes_profile"] = active_hermes_profile()
+    out["hermes_config_path"] = str(path)
+    out["hermes_config_exists"] = path.exists()
     return out
 
 
+def sync_voice_to_alpha_os() -> dict[str, Any]:
+    """Mirror detected Hermes voice settings into ~/.alpha-os/config.yaml."""
+    voice = load_voice_config()
+    cfg = load_config()
+    cfg.setdefault("voice", {})
+    cfg["voice"].update(
+        {
+            "wake_word": voice["wake_word"],
+            "browser_wake": voice["browser_wake"],
+            "enabled": voice["server_wake"],
+            "providers": {"grok_oauth": voice["grok_oauth"]},
+            "tts_provider": voice["tts_provider"],
+            "tts_voice": voice["tts_voice"],
+            "stt_provider": voice["stt_provider"],
+            "stt_model": voice["stt_model"],
+            "auto_tts": voice["auto_tts"],
+            "hermes_profile": voice.get("hermes_profile"),
+            "model_provider": voice.get("model_provider"),
+            "model_default": voice.get("model_default"),
+        }
+    )
+    save_config(cfg)
+    return voice
+
+
+def ensure_hermes_alpha_os_block() -> None:
+    """Ensure alpha_os voice flags exist in active profile Hermes config."""
+    cfg = read_hermes_config()
+    alpha = dict(_alpha_os_block(cfg))
+    model = _model_block(cfg)
+    tts, tts_voice = _resolve_tts(_tts_block(cfg), model)
+    changed = False
+
+    if "wake_word" not in alpha:
+        alpha["wake_word"] = DEFAULT_WAKE
+        changed = True
+    if "browser_wake" not in alpha:
+        alpha["browser_wake"] = True
+        changed = True
+    if "grok_oauth" not in alpha and _uses_grok_oauth(model):
+        alpha["grok_oauth"] = True
+        changed = True
+
+    if changed:
+        cfg["alpha_os"] = alpha
+        write_hermes_config(cfg)
+
+    if _uses_grok_oauth(model) and tts == "xai":
+        tts_cfg = dict(_tts_block(cfg))
+        if str(tts_cfg.get("provider") or "").lower() != "xai":
+            tts_cfg["provider"] = "xai"
+            xai = dict(tts_cfg.get("xai") or {})
+            if not xai.get("voice_id") and tts_voice:
+                xai["voice_id"] = tts_voice
+            tts_cfg["xai"] = xai
+            cfg["tts"] = tts_cfg
+            write_hermes_config(cfg)
+
+
 def apply_voice_config(updates: dict[str, Any]) -> dict[str, Any]:
-    """Persist voice settings to ~/.hermes/config.yaml and mirror to ~/.alpha-os."""
+    """Persist voice settings to active Hermes profile and mirror to ~/.alpha-os."""
+    if updates.get("hermes_profile"):
+        set_active_hermes_profile(str(updates["hermes_profile"]))
+
     cfg = read_hermes_config()
     alpha = dict(_alpha_os_block(cfg))
     voice = dict(_voice_block(cfg))
     stt = dict(_stt_block(cfg))
     tts = dict(_tts_block(cfg))
+    model = dict(_model_block(cfg))
 
     if updates.get("wake_word") is not None:
         wake = str(updates["wake_word"]).strip() or DEFAULT_WAKE
@@ -163,16 +313,27 @@ def apply_voice_config(updates: dict[str, Any]) -> dict[str, Any]:
     if updates.get("stt_provider") is not None:
         stt["provider"] = str(updates["stt_provider"])
     if updates.get("stt_model") is not None:
-        local = stt.setdefault("local", {})
+        provider = str(stt.get("provider") or "local")
+        block_key, model_key = _STT_MODEL_KEYS.get(provider, ("local", "model"))
+        local = stt.setdefault(block_key, {})
         if isinstance(local, dict):
-            local["model"] = str(updates["stt_model"])
+            local[model_key] = str(updates["stt_model"])
 
     if updates.get("tts_provider") is not None:
         tts["provider"] = str(updates["tts_provider"])
     if updates.get("tts_voice") is not None:
-        edge = tts.setdefault("edge", {})
-        if isinstance(edge, dict):
-            edge["voice"] = str(updates["tts_voice"])
+        provider = str(updates.get("tts_provider") or tts.get("provider") or "edge")
+        block_key, voice_key = _TTS_VOICE_KEYS.get(provider, ("edge", "voice"))
+        block = tts.setdefault(block_key, {})
+        if isinstance(block, dict):
+            block[voice_key] = str(updates["tts_voice"])
+
+    if updates.get("model_provider") is not None:
+        model["provider"] = str(updates["model_provider"])
+        set_key("voice.model_provider", str(updates["model_provider"]))
+    if updates.get("model_default") is not None:
+        model["default"] = str(updates["model_default"])
+        set_key("voice.model_default", str(updates["model_default"]))
 
     cfg["alpha_os"] = alpha
     if voice:
@@ -181,15 +342,22 @@ def apply_voice_config(updates: dict[str, Any]) -> dict[str, Any]:
         cfg["stt"] = stt
     if tts:
         cfg["tts"] = tts
+    if model:
+        cfg["model"] = model
 
     write_hermes_config(cfg)
+    return sync_voice_to_alpha_os()
 
-    if updates.get("wake_word") is not None:
-        try:
-            from alpha_os.voice.openclaw_voicewake import write_voicewake, wake_word_to_triggers
 
-            write_voicewake(wake_word_to_triggers(str(updates["wake_word"]).strip() or DEFAULT_WAKE))
-        except Exception:
-            pass
-
-    return load_voice_config()
+def hermes_config_snapshot() -> dict[str, Any]:
+    """Editable Hermes profile blocks for the settings UI."""
+    cfg = read_hermes_config()
+    return {
+        "profile": active_hermes_profile(),
+        "config_path": str(hermes_config_path()),
+        "alpha_os": _alpha_os_block(cfg),
+        "voice": _voice_block(cfg),
+        "stt": _stt_block(cfg),
+        "tts": _tts_block(cfg),
+        "model": _model_block(cfg),
+    }

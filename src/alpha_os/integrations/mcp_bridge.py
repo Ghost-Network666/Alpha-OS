@@ -1,250 +1,314 @@
-"""MCP bridge — probe stdio MCP servers from Hermes/OpenClaw configs."""
+"""MCPBridge — connect to configured MCP servers and list tools."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import shutil
-from typing import Any
+from typing import Any, Callable
 
-from alpha_os.integrations.mcp_discovery import (
-    config_paths_status,
-    discover_mcp_servers,
-    discovery_sources,
+from alpha_os.integrations.mcp_discovery import discover_mcp_servers, discovery_sources
+from alpha_os.integrations.mcp_humanize import (
+    build_category_summary,
+    enrich_tool,
+    humanize_tool_result,
 )
 
 logger = logging.getLogger("alpha_os.mcp")
 
+_SAMPLE_ARGS: dict[str, dict[str, Any]] = {
+    "alpha_discover_high_liquidity": {"limit": 3},
+    "alpha_discover_active_btc_15m": {},
+    "alpha_discover_ending_soon": {"limit": 3},
+}
 
-def _command_preview(command: str, args: list[str]) -> str:
-    parts = [command, *args]
-    return " ".join(parts)[:160]
 
-
-def _mcp_package_missing() -> str:
-    return "mcp package not installed — run: pip install alpha-os[mcp]"
+def _pick_sample_tool(tools: list[dict[str, Any]]) -> tuple[str, dict[str, Any]] | None:
+    names = [t.get("name", "") for t in tools]
+    for prefer in _SAMPLE_ARGS:
+        if prefer in names:
+            return prefer, dict(_SAMPLE_ARGS[prefer])
+    for t in tools:
+        n = str(t.get("name", "")).lower()
+        if "discover" in n:
+            return str(t["name"]), {}
+    return None
 
 
 class MCPBridge:
-    """Single stdio MCP server — same subprocess Hermes/OpenClaw would launch."""
+    """Single stdio MCP server connection."""
 
-    def __init__(self, definition: dict[str, Any]):
-        self.definition = definition
-        self.name = str(definition.get("name", ""))
-        self.command = str(definition.get("command") or "")
-        self.args = list(definition.get("args") or [])
-        self._env = dict(definition.get("env") or {})
-        self.env_keys = list(definition.get("env_keys") or sorted(self._env.keys()))
-        self.source = str(definition.get("source") or "")
-        self.config_path = str(definition.get("config_path") or "")
-        self.transport = str(definition.get("transport") or "stdio")
-        self.probeable = bool(definition.get("probeable", True))
-        self.connect_timeout = float(definition.get("connect_timeout") or 8.0)
-        self.tool_policy = dict(definition.get("tool_policy") or {})
+    def __init__(
+        self,
+        name: str,
+        command: str,
+        args: list[str],
+        env: dict[str, str],
+        source: str = "",
+    ):
+        self.name = name
+        self.command = command
+        self.args = args
+        self.env = env
+        self.source = source
         self._connected = False
         self._tools: list[dict[str, Any]] = []
         self._error: str | None = None
+        self._widgets: list[dict[str, Any]] = []
 
-    async def connect(self) -> bool:
-        if not self.probeable:
-            self._error = None
-            self._connected = False
-            self._tools = []
-            return False
+    def _server_params(self):
+        from mcp import StdioServerParameters
 
-        if not self.command:
-            self._error = "Missing command"
-            return False
-
-        if not shutil.which(self.command.split("/")[-1]) and "/" not in self.command:
-            # npx, uvx, etc. may not be in PATH during probe — still try
-            pass
-
-        try:
-            from mcp import ClientSession, StdioServerParameters
-            from mcp.client.stdio import stdio_client
-        except ImportError:
-            self._error = _mcp_package_missing()
-            return False
-
-        import os
-
-        env = {**dict(os.environ), **{k: str(v) for k, v in self._env.items()}}
-        params = StdioServerParameters(
+        return StdioServerParameters(
             command=self.command,
             args=self.args,
-            env=env,
+            env={**dict(__import__("os").environ), **{k: str(v) for k, v in self.env.items()}},
         )
-        timeout = self.connect_timeout
+
+    async def _with_session(self, fn: Callable) -> Any:
+        from mcp import ClientSession
+        from mcp.client.stdio import stdio_client
+
+        params = self._server_params()
+        async with asyncio.timeout(12):
+            async with stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    return await fn(session)
+
+    async def connect(self, *, sample_data: bool = True) -> bool:
         try:
-            async with asyncio.timeout(timeout):
-                async with stdio_client(params) as (read, write):
-                    async with ClientSession(read, write) as session:
-                        await session.initialize()
-                        result = await session.list_tools()
-                        self._tools = [
-                            {
-                                "name": t.name,
-                                "description": (t.description or "")[:200],
-                            }
-                            for t in (result.tools or [])
-                        ]
-                        self._connected = True
-                        self._error = None
-                        return True
+            from mcp import ClientSession
+            from mcp.client.stdio import stdio_client
+        except ImportError:
+            self._error = "mcp package not installed (pip install mcp)"
+            return False
+
+        self._widgets = []
+        try:
+            async def _probe(session: ClientSession) -> list[dict[str, Any]]:
+                result = await session.list_tools()
+                return [
+                    {
+                        "name": t.name,
+                        "description": (t.description or "")[:240],
+                    }
+                    for t in (result.tools or [])
+                ]
+
+            tools = await self._with_session(_probe)
+            self._tools = tools
+            self._connected = True
+            self._error = None
+            if sample_data:
+                await self._fetch_sample_widget()
+            return True
         except Exception as e:
             logger.warning("MCP %s offline: %s", self.name, e)
             self._connected = False
-            self._error = str(e)[:240]
+            self._error = str(e)[:200]
             self._tools = []
+            self._widgets = []
             return False
 
+    async def _fetch_sample_widget(self) -> None:
+        pick = _pick_sample_tool(self._tools)
+        if not pick:
+            return
+        tool_name, args = pick
+        desc = next((t.get("description", "") for t in self._tools if t.get("name") == tool_name), "")
+        try:
+            widget = await self.call_tool(tool_name, args)
+            self._widgets = [
+                humanize_tool_result(
+                    server=self.name,
+                    tool_name=tool_name,
+                    description=desc,
+                    raw=widget.get("result"),
+                    ok=widget.get("ok", False),
+                    error=widget.get("error"),
+                )
+            ]
+        except Exception as exc:
+            self._widgets = [
+                humanize_tool_result(
+                    server=self.name,
+                    tool_name=tool_name,
+                    description=desc,
+                    raw=None,
+                    ok=False,
+                    error=str(exc)[:200],
+                )
+            ]
+
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+        if not self.command:
+            return {"ok": False, "error": "No MCP command configured"}
+
+        async def _call(session) -> Any:
+            return await session.call_tool(tool_name, arguments or {})
+
+        try:
+            result = await self._with_session(_call)
+            payload: Any = result
+            if hasattr(result, "model_dump"):
+                payload = result.model_dump()
+            elif hasattr(result, "content"):
+                payload = {"content": getattr(result, "content")}
+            return {"ok": True, "result": payload, "tool": tool_name, "server": self.name}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)[:300], "tool": tool_name, "server": self.name}
+
     def get_tools(self) -> list[dict[str, Any]]:
-        return list(self._tools)
+        return [enrich_tool(self._connected, t) for t in self._tools]
+
+    def get_widgets(self) -> list[dict[str, Any]]:
+        return list(self._widgets)
 
     def to_dict(self) -> dict[str, Any]:
-        base: dict[str, Any] = {
+        tools = self.get_tools()
+        return {
             "name": self.name,
             "connected": self._connected,
-            "transport": self.transport,
-            "probeable": self.probeable,
-            "tool_count": len(self._tools),
-            "tools": self._tools[:24],
+            "transport": "stdio",
+            "tool_count": len(tools),
+            "tools_online": sum(1 for t in tools if t.get("status") == "online"),
+            "tools_offline": sum(1 for t in tools if t.get("status") == "offline"),
+            "tools": tools,
+            "categories": build_category_summary(tools),
+            "widgets": self.get_widgets(),
             "error": self._error,
+            "command": self.command,
             "source": self.source,
-            "config_path": self.config_path,
-            "tool_policy": self.tool_policy or None,
         }
-        if self.probeable:
-            base["command"] = self.command
-            base["args"] = self.args
-            base["command_preview"] = _command_preview(self.command, self.args)
-            if self.env_keys:
-                base["env_keys"] = self.env_keys
-        else:
-            base["url"] = self.definition.get("url")
-            base["auth"] = self.definition.get("auth")
-            base["note"] = self.definition.get("note")
-            base["status"] = "configured"
-        return base
 
 
 class MCPRegistry:
-    """Discover and probe stdio MCP servers from runtime configs."""
+    """Discover and probe all configured MCP servers."""
 
     def __init__(self):
         self._servers: list[MCPBridge] = []
         self._last_scan: float | None = None
-        self._runtime: str = "auto"
-        self._data: dict[str, Any] = self._empty_data()
-
-    @staticmethod
-    def _empty_data() -> dict[str, Any]:
-        return {
+        self._data: dict[str, Any] = {
             "connected": False,
             "server_count": 0,
-            "stdio_count": 0,
-            "remote_count": 0,
             "tool_count": 0,
             "servers": [],
-            "config_paths": [],
-            "sources": [],
-            "runtime": "auto",
+            "widgets": [],
+            "categories": [],
+            "servers_online": 0,
+            "servers_offline": 0,
+            "tools_online": 0,
+            "tools_offline": 0,
             "error": None,
-            "summary": (
-                "No MCP servers in runtime config — add stdio servers to "
-                "mcp_servers (Hermes) or mcp.servers (OpenClaw)"
-            ),
         }
 
-    def _load_definitions(self, runtime: str | None = None) -> list[MCPBridge]:
-        defs = discover_mcp_servers(runtime)
-        return [MCPBridge(d) for d in defs]
+    def _load_definitions(self) -> list[MCPBridge]:
+        defs = discover_mcp_servers()
+        return [
+            MCPBridge(
+                name=d["name"],
+                command=d["command"] or "",
+                args=d.get("args") or [],
+                env=d.get("env") or {},
+                source=str(d.get("source") or ""),
+            )
+            for d in defs
+            if d.get("transport") == "stdio" and d.get("command")
+        ]
 
-    def _empty_message(self, runtime: str) -> str:
-        paths = config_paths_status()
-        hermes = next((p for p in paths if p["runtime"] == "hermes"), None)
-        openclaw = next((p for p in paths if p["runtime"] == "openclaw"), None)
-        if runtime == "hermes":
-            path = hermes["path"] if hermes else "~/.hermes/config.yaml"
-            return f"No MCP servers in {path} — add mcp_servers entries (stdio command + args)"
-        if runtime == "openclaw":
-            path = openclaw["path"] if openclaw else "~/.openclaw/openclaw.json"
-            return f"No MCP servers in {path} — add mcp.servers entries (stdio or remote)"
-        return (
-            "No MCP servers found — configure stdio MCP in "
-            "~/.hermes/config.yaml (mcp_servers) or "
-            "~/.openclaw/openclaw.json (mcp.servers)"
-        )
-
-    async def refresh(self, runtime: str | None = None) -> dict[str, Any]:
+    async def refresh(self, *, sample_data: bool = True) -> dict[str, Any]:
         import time
 
-        self._runtime = (runtime or self._runtime or "auto").lower()
-        self._servers = self._load_definitions(self._runtime)
-        config_paths = config_paths_status()
-
+        self._servers = self._load_definitions()
         if not self._servers:
             self._data = {
-                **self._empty_data(),
-                "runtime": self._runtime,
-                "config_paths": config_paths,
+                "connected": False,
+                "server_count": 0,
+                "tool_count": 0,
+                "servers": [],
+                "widgets": [],
+                "categories": [],
+                "servers_online": 0,
+                "servers_offline": 0,
+                "tools_online": 0,
+                "tools_offline": 0,
+                "error": (
+                    "No stdio MCP servers found — configure mcp_servers in "
+                    "~/.hermes/config.yaml or mcp.servers in ~/.openclaw/openclaw.json"
+                ),
                 "sources": discovery_sources(),
-                "error": self._empty_message(self._runtime),
-                "summary": self._empty_message(self._runtime),
             }
             self._last_scan = time.time()
             return dict(self._data)
 
-        stdio = [s for s in self._servers if s.probeable]
-        remote = [s for s in self._servers if not s.probeable]
+        results = await asyncio.gather(
+            *[s.connect(sample_data=sample_data) for s in self._servers],
+            return_exceptions=True,
+        )
+        servers_out = []
+        widgets: list[dict[str, Any]] = []
+        all_tools: list[dict[str, Any]] = []
+        total_tools = 0
+        tools_online = 0
+        tools_offline = 0
+        servers_online = 0
+        any_connected = False
 
-        if stdio:
-            results = await asyncio.gather(
-                *[s.connect() for s in stdio],
-                return_exceptions=True,
-            )
-            for bridge, res in zip(stdio, results):
-                if isinstance(res, Exception):
-                    bridge._error = str(res)[:240]
+        for bridge, res in zip(self._servers, results):
+            if isinstance(res, Exception):
+                bridge._error = str(res)[:200]
+            if bridge._connected:
+                any_connected = True
+                servers_online += 1
+            tools = bridge.get_tools()
+            all_tools.extend(tools)
+            total_tools += len(tools)
+            tools_online += sum(1 for t in tools if t.get("status") == "online")
+            tools_offline += sum(1 for t in tools if t.get("status") == "offline")
+            widgets.extend(bridge.get_widgets())
+            servers_out.append(bridge.to_dict())
 
-        servers_out = [s.to_dict() for s in self._servers]
-        stdio_connected = sum(1 for s in stdio if s._connected)
-        total_tools = sum(len(s.get_tools()) for s in stdio)
-        any_stdio_ok = stdio_connected > 0
-
-        if not stdio and remote:
-            summary = (
-                f"{len(remote)} remote MCP server(s) configured — "
-                "connections managed by Hermes/OpenClaw"
-            )
-            error = None
-        elif stdio and not any_stdio_ok:
-            summary = f"0/{len(stdio)} stdio MCP server(s) reachable"
-            error = "All stdio MCP probes failed — check command, args, and env in runtime config"
-        else:
-            remote_note = f", {len(remote)} remote" if remote else ""
-            summary = (
-                f"{stdio_connected}/{len(stdio)} stdio MCP online"
-                f"{remote_note} · {total_tools} tools discovered"
-            )
-            error = None if any_stdio_ok or remote else summary
+        servers_offline = len(self._servers) - servers_online
 
         self._data = {
-            "connected": any_stdio_ok or bool(remote),
+            "connected": any_connected,
             "server_count": len(self._servers),
-            "stdio_count": len(stdio),
-            "remote_count": len(remote),
             "tool_count": total_tools,
+            "servers_online": servers_online,
+            "servers_offline": servers_offline,
+            "tools_online": tools_online,
+            "tools_offline": tools_offline,
             "servers": servers_out,
-            "config_paths": config_paths,
+            "widgets": widgets,
+            "categories": build_category_summary(all_tools),
             "sources": discovery_sources(),
-            "runtime": self._runtime,
-            "error": error,
-            "summary": summary,
+            "error": None if any_connected else "All stdio MCP servers offline",
         }
         self._last_scan = time.time()
         return dict(self._data)
+
+    async def call_tool(self, server: str, tool: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+        bridge = next((s for s in self._servers if s.name == server), None)
+        if not bridge:
+            bridge = next((s for s in self._load_definitions() if s.name == server), None)
+        if not bridge:
+            return {"ok": False, "error": f"MCP server '{server}' not found"}
+        result = await bridge.call_tool(tool, arguments)
+        if result.get("ok"):
+            desc = ""
+            for t in bridge._tools:
+                if t.get("name") == tool:
+                    desc = str(t.get("description", ""))
+                    break
+            widget = humanize_tool_result(
+                server=server,
+                tool_name=tool,
+                description=desc,
+                raw=result.get("result"),
+                ok=True,
+            )
+            result["widget"] = widget
+        return result
 
     def get_panel_data(self) -> dict[str, Any]:
         return dict(self._data)

@@ -163,7 +163,8 @@ class HermesBridge:
         except Exception:
             pass
 
-    def _build_agent_cards(self) -> None:
+    def _build_capability_cards(self) -> list[dict[str, Any]]:
+        """Toolsets, skills, and sessions — not Hermes agents."""
         cards: list[dict[str, Any]] = []
         idx = 0
         for ts in self._toolsets:
@@ -174,37 +175,46 @@ class HermesBridge:
             tool_count = len(tools) if isinstance(tools, list) else 0
             enabled = ts.get("enabled", True)
             cards.append({
+                "id": f"toolset-{idx}-{name}",
+                "kind": "toolset",
                 "name": name,
-                "title": f"Toolset • {tool_count} tools",
+                "title": f"{tool_count} tools",
                 "status": "ACTIVE" if enabled else "OFFLINE",
                 "color": color_for_index(idx),
                 "tool_count": tool_count,
             })
             idx += 1
-        for sk in self._skills[:10]:
+        for sk in self._skills:
             if not isinstance(sk, dict):
                 continue
             name = sk.get("name", f"skill-{idx}")
             cards.append({
+                "id": f"skill-{idx}-{name}",
+                "kind": "skill",
                 "name": name,
-                "title": sk.get("description", "Skill")[:60],
+                "title": (sk.get("description") or "Skill")[:80],
                 "status": "Ready",
                 "color": color_for_index(idx),
             })
             idx += 1
-        for sess in self._sessions[:5]:
+        for sess in self._sessions:
             if not isinstance(sess, dict):
                 continue
             sid = sess.get("id", sess.get("session_id", f"session-{idx}"))
             model = sess.get("model", "")
             cards.append({
-                "name": str(sid)[:24],
+                "id": f"session-{idx}-{sid}",
+                "kind": "session",
+                "name": str(sid)[:28],
                 "title": model or sess.get("title", "Session"),
                 "status": "ACTIVE" if sess.get("active") else "Ready",
                 "color": color_for_index(idx),
             })
             idx += 1
-        self._agents = cards
+        return cards
+
+    def _build_agent_cards(self) -> None:
+        self._agents = self._build_capability_cards()
 
     async def stream_events(self, callback: Callable[[dict], None]) -> None:
         url = f"{self.gateway_url}/v1/runs/stream"
@@ -231,6 +241,9 @@ class HermesBridge:
             self._connected = False
 
     def get_agent_list(self) -> list[dict[str, Any]]:
+        return list(self._agents)
+
+    def get_capabilities(self) -> list[dict[str, Any]]:
         return list(self._agents)
 
     def get_toolsets(self) -> list[dict[str, Any]]:

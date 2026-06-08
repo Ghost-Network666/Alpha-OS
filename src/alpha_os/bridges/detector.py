@@ -9,20 +9,20 @@ from typing import Any, Optional
 
 import httpx
 
-from alpha_os.config import read_hermes_env, read_openclaw_config, read_openclaw_env
+from alpha_os.config import (
+    active_hermes_profile,
+    hermes_home,
+    read_hermes_config,
+    read_hermes_env,
+    read_openclaw_config,
+    read_openclaw_env,
+)
+from alpha_os.runtime_env import openclaw_home
 
 logger = logging.getLogger("alpha_os.detector")
 
-HERMES_HOME = __import__("pathlib").Path.home() / ".hermes"
-OPENCLAW_HOME = __import__("pathlib").Path.home() / ".openclaw"
-
-
-def hermes_installed() -> bool:
-    return HERMES_HOME.exists()
-
-
-def openclaw_installed() -> bool:
-    return OPENCLAW_HOME.exists()
+HERMES_HOME = hermes_home()
+OPENCLAW_HOME = openclaw_home()
 
 PALETTE = ["#00f0ff", "#39ff14", "#ff2a6d", "#ff9f1c", "#7b2cbf"]
 
@@ -52,16 +52,79 @@ async def _probe_http(url: str, headers: Optional[dict] = None, timeout: float =
     return False
 
 
-def _hermes_candidates() -> list[str]:
-    env = read_hermes_env()
-    urls = []
+def _env_gateway_url(env: dict[str, str]) -> str | None:
     if env.get("HERMES_GATEWAY_URL"):
-        urls.append(env["HERMES_GATEWAY_URL"])
-    if env.get("API_SERVER_HOST") and env.get("API_SERVER_PORT"):
-        host = env["API_SERVER_HOST"]
-        port = env["API_SERVER_PORT"]
-        urls.append(f"http://{host}:{port}")
+        return env["HERMES_GATEWAY_URL"]
+    host = env.get("API_SERVER_HOST")
+    port = env.get("API_SERVER_PORT")
+    if host and port:
+        scheme = "https" if str(port) == "443" else "http"
+        return f"{scheme}://{host}:{port}"
+    return None
+
+
+def _hermes_profile_envs() -> list[dict[str, str]]:
+    """Global + every profile .env under ~/.hermes/profiles/*/."""
+    import os
+    from pathlib import Path
+
+    out: list[dict[str, str]] = []
+    seen_paths: set[str] = set()
+
+    def _parse_env(path: Path) -> dict[str, str]:
+        parsed: dict[str, str] = {}
+        if not path.exists():
+            return parsed
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                parsed[k.strip()] = v.strip().strip('"').strip("'")
+        except Exception:
+            pass
+        return parsed
+
+    global_env = hermes_home() / ".env"
+    if str(global_env) not in seen_paths:
+        seen_paths.add(str(global_env))
+        out.append(_parse_env(global_env))
+
+    profiles_root = hermes_home() / "profiles"
+    if profiles_root.is_dir():
+        for profile_dir in sorted(profiles_root.iterdir()):
+            env_path = profile_dir / ".env"
+            if env_path.is_file() and str(env_path) not in seen_paths:
+                seen_paths.add(str(env_path))
+                out.append(_parse_env(env_path))
+
+    active = active_hermes_profile()
+    if active:
+        os.environ.setdefault("HERMES_PROFILE", active)
+    return out
+
+
+def _hermes_candidates() -> list[str]:
+    urls: list[str] = []
+    for env in _hermes_profile_envs():
+        url = _env_gateway_url(env)
+        if url:
+            urls.append(url)
+
+    env = read_hermes_env()
+    url = _env_gateway_url(env)
+    if url:
+        urls.append(url)
+
+    cfg = read_hermes_config()
+    api = cfg.get("api_server") if isinstance(cfg.get("api_server"), dict) else {}
+    if api.get("host") and api.get("port"):
+        urls.append(f"http://{api['host']}:{api['port']}")
+
     urls.extend([
+        "http://127.0.0.1:9999",
+        "http://localhost:9999",
         "http://127.0.0.1:8642",
         "http://localhost:8642",
     ])
@@ -78,12 +141,28 @@ def _openclaw_candidates() -> list[str]:
     cfg = read_openclaw_config()
     gw = cfg.get("gateway", {}) if isinstance(cfg.get("gateway"), dict) else {}
     port = gw.get("port", 18789)
-    urls = [
+    urls: list[str] = []
+
+    env = read_openclaw_env()
+    for key in ("OPENCLAW_GATEWAY_URL", "GATEWAY_URL"):
+        if env.get(key):
+            urls.append(env[key])
+
+    if gw.get("url"):
+        urls.append(str(gw["url"]))
+    if gw.get("bind") and port:
+        bind = str(gw["bind"])
+        if bind.startswith(":"):
+            bind = f"127.0.0.1{bind}"
+        urls.append(f"http://{bind}")
+        urls.append(f"ws://{bind}")
+
+    urls.extend([
         f"http://127.0.0.1:{port}",
         f"http://localhost:{port}",
         f"ws://127.0.0.1:{port}",
         f"ws://localhost:{port}",
-    ]
+    ])
     seen: set[str] = set()
     out = []
     for u in urls:
@@ -105,8 +184,11 @@ def _hermes_api_key() -> str:
 def _openclaw_token() -> str:
     import os
 
+    token = os.getenv("OPENCLAW_GATEWAY_TOKEN", "") or os.getenv("OPENCLAW_TOKEN", "")
+    if token:
+        return token
     env = read_openclaw_env()
-    token = os.getenv("OPENCLAW_GATEWAY_TOKEN", "") or env.get("OPENCLAW_GATEWAY_TOKEN", "")
+    token = env.get("OPENCLAW_GATEWAY_TOKEN") or env.get("OPENCLAW_TOKEN") or env.get("GATEWAY_TOKEN", "")
     if token:
         return token
     cfg = read_openclaw_config()
@@ -117,7 +199,7 @@ def _openclaw_token() -> str:
 
 async def detect_hermes() -> RuntimeInfo:
     info = RuntimeInfo(name="hermes")
-    if not HERMES_HOME.exists():
+    if not hermes_home().exists():
         info.details["reason"] = "no ~/.hermes directory"
         return info
 
@@ -130,7 +212,7 @@ async def detect_hermes() -> RuntimeInfo:
         if await _probe_http(http_url, headers=headers):
             info.connected = True
             info.gateway_url = http_url
-            info.details["home"] = str(HERMES_HOME)
+            info.details["home"] = str(hermes_home())
             try:
                 async with httpx.AsyncClient(timeout=5.0) as client:
                     r = await client.get(
@@ -143,14 +225,14 @@ async def detect_hermes() -> RuntimeInfo:
                 pass
             return info
 
-    info.gateway_url = _hermes_candidates()[0] if _hermes_candidates() else "http://127.0.0.1:8642"
+    info.gateway_url = _hermes_candidates()[0] if _hermes_candidates() else "http://127.0.0.1:9999"
     info.details["reason"] = "hermes home found but API server not reachable"
     return info
 
 
 async def detect_openclaw() -> RuntimeInfo:
     info = RuntimeInfo(name="openclaw")
-    if not OPENCLAW_HOME.exists():
+    if not openclaw_home().exists():
         info.details["reason"] = "no ~/.openclaw directory"
         return info
 
@@ -163,7 +245,7 @@ async def detect_openclaw() -> RuntimeInfo:
             info.connected = True
             info.gateway_url = http_url
             info.ws_url = http_url.replace("http://", "ws://").replace("https://", "wss://")
-            info.details["home"] = str(OPENCLAW_HOME)
+            info.details["home"] = str(openclaw_home())
             return info
 
     port = 18789
@@ -183,9 +265,9 @@ async def detect_best() -> RuntimeInfo:
         return hermes
     if openclaw.connected:
         return openclaw
-    if HERMES_HOME.exists():
+    if hermes_home().exists():
         return hermes
-    if OPENCLAW_HOME.exists():
+    if openclaw_home().exists():
         return openclaw
     return RuntimeInfo(name="offline", details={"reason": "no runtime detected"})
 

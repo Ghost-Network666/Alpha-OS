@@ -1,39 +1,35 @@
 "use client";
 
+import { memo } from "react";
 import type { AlphaState } from "@/types/state";
 import { MetricCard } from "./MetricCard";
 
 interface MetricsBarProps {
   metrics: AlphaState["metrics"];
-  mcp: AlphaState["mcp"];
+  polymarket: AlphaState["polymarket"];
   history: Record<string, number[]>;
+  gatewayOnline?: boolean;
   pulseKey?: number;
 }
 
-export function MetricsBar({
+function fmt(value: number | null | undefined, suffix = ""): string {
+  if (value === null || value === undefined) return "—";
+  return `${value}${suffix}`;
+}
+
+export const MetricsBar = memo(function MetricsBar({
   metrics,
-  mcp,
+  polymarket,
   history,
+  gatewayOnline = true,
   pulseKey = 0,
 }: MetricsBarProps) {
   const cards = [
     {
-      key: "sessions",
-      label: "Sessions",
-      value: metrics.sessions,
+      key: "toolsets",
+      label: "Toolsets",
+      value: metrics.toolsets ?? 0,
       accent: "cyan" as const,
-    },
-    {
-      key: "agents",
-      label: "Agents",
-      value: metrics.agents,
-      accent: "cyan" as const,
-    },
-    {
-      key: "tools",
-      label: "Tools",
-      value: metrics.tools,
-      accent: "green" as const,
     },
     {
       key: "skills",
@@ -42,25 +38,61 @@ export function MetricsBar({
       accent: "green" as const,
     },
     {
+      key: "tools",
+      label: "Tools",
+      value: metrics.tools,
+      accent: "green" as const,
+    },
+    {
+      key: "plugins",
+      label: "MCP",
+      value: metrics.plugins ?? 0,
+      accent: "cyan" as const,
+    },
+    {
+      key: "sessions",
+      label: "Sessions",
+      value: metrics.sessions,
+      accent: "cyan" as const,
+    },
+    {
       key: "events",
       label: "Events/min",
-      value: metrics.events_per_min,
-      accent: "cyan" as const,
+      value: gatewayOnline ? metrics.events_per_min : "—",
+      accent: gatewayOnline ? ("cyan" as const) : ("amber" as const),
     },
   ];
 
-  if ((mcp.server_count ?? 0) > 0) {
-    cards.push({
-      key: "mcp_tools",
-      label: "MCP Tools",
-      value: mcp.tool_count,
-      accent: "green" as const,
-    });
-  }
+  const polyCards = polymarket.connected
+    ? [
+        {
+          key: "pnl",
+          label: "P&L Today",
+          value: fmt(polymarket.pnl_today),
+          accent: "green" as const,
+          history: history.pnl ?? [],
+        },
+        {
+          key: "positions",
+          label: "Open Positions",
+          value: fmt(polymarket.open_positions),
+          accent: "cyan" as const,
+          history: history.positions ?? [],
+        },
+        {
+          key: "winrate",
+          label: "Win Rate",
+          value:
+            polymarket.win_rate != null ? `${polymarket.win_rate}%` : "—",
+          accent: "pink" as const,
+          history: history.winrate ?? [],
+        },
+      ]
+    : [];
 
   return (
     <div className="shrink-0 border-b border-slate-800/60 bg-[#0a0a0f]/80 px-4 py-2">
-      <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
+      <div className="flex gap-2 overflow-x-auto pb-1">
         {cards.map((c) => (
           <MetricCard
             key={c.key}
@@ -68,10 +100,20 @@ export function MetricsBar({
             value={c.value}
             history={history[c.key] ?? []}
             accent={c.accent}
+            pulse={pulseKey > 0 && gatewayOnline}
+          />
+        ))}
+        {polyCards.map((c) => (
+          <MetricCard
+            key={c.key}
+            label={c.label}
+            value={c.value}
+            history={c.history}
+            accent={c.accent}
             pulse={pulseKey > 0}
           />
         ))}
       </div>
     </div>
   );
-}
+});

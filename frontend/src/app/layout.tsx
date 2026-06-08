@@ -1,6 +1,11 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+
+const TAILSCALE_HTTPS = (
+  process.env.NEXT_PUBLIC_TAILSCALE_HTTPS_URL ?? ""
+).replace(/\/$/, "");
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -28,6 +33,11 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} h-full font-sans antialiased`}
       >
+        {TAILSCALE_HTTPS ? (
+          <Script id="alpha-os-https-redirect" strategy="beforeInteractive">
+            {`(function(){var h=location.hostname;if(location.protocol!=="http:")return;if(h==="localhost"||h==="127.0.0.1")return;var u=${JSON.stringify(TAILSCALE_HTTPS)};if(!u)return;location.replace(u+location.pathname+location.search);})();`}
+          </Script>
+        ) : null}
         {children}
       </body>
     </html>

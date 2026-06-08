@@ -1,40 +1,42 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { API_BASE, fetchState, resolveWsUrl } from "@/lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { fetchState, reconnectRuntime, wsStateUrl } from "@/lib/api";
+import { setRuntimeTailscaleHttps } from "@/lib/secure-context";
 import type { AlphaState } from "@/types/state";
 
 const EMPTY_METRICS: AlphaState["metrics"] = {
   sessions: 0,
   agents: 0,
   tools: 0,
+  toolsets: 0,
   skills: 0,
+  plugins: 0,
   events_per_min: 0,
 };
 
 const EMPTY_STATE: AlphaState = {
   agents: [],
+  capabilities: [],
   greeting: "",
   runtime: "offline",
   hermes_installed: false,
-  openclaw_installed: false,
   live: false,
+  gateway_online: false,
   hermes_connected: false,
   openclaw_connected: false,
   metrics: EMPTY_METRICS,
+  polymarket: {
+    connected: false,
+    pnl_today: null,
+    open_positions: null,
+    win_rate: null,
+  },
   live_events: [],
   event_seq: 0,
   orb_pulse: false,
   integrations: { connected: false, toolsets: [], skills: [], sessions: [] },
-  mcp: {
-    connected: false,
-    server_count: 0,
-    stdio_count: 0,
-    remote_count: 0,
-    tool_count: 0,
-    servers: [],
-    summary: null,
-  },
+  mcp: { connected: false, server_count: 0, tool_count: 0, servers: [] },
   tailscale: {
     available: false,
     backend_state: "unknown",
@@ -45,52 +47,90 @@ const EMPTY_STATE: AlphaState = {
 };
 
 function pushHist(prev: Record<string, number[]>, key: string, value: number) {
-  const hist = [...(prev[key] ?? []), value];
-  if (hist.length > 24) hist.shift();
-  return { ...prev, [key]: hist };
+  const hist = prev[key] ?? [];
+  if (hist.length && hist[hist.length - 1] === value) return prev;
+  const next = [...hist, value];
+  if (next.length > 16) next.shift();
+  return { ...prev, [key]: next };
+}
+
+type ApplyOptions = { force?: boolean };
+
+function stateFingerprint(data: AlphaState): string {
+  const m = data.metrics;
+  return [
+    data.event_seq ?? 0,
+    data.live ? 1 : 0,
+    data.gateway_online ? 1 : 0,
+    data.hermes_connected ? 1 : 0,
+    m?.toolsets ?? 0,
+    m?.tools ?? 0,
+    m?.skills ?? 0,
+    data.capabilities?.length ?? data.agents?.length ?? 0,
+    data.mcp?.tool_count ?? 0,
+    data.mcp?.widgets?.length ?? 0,
+    data.mcp?.tools_online ?? 0,
+  ].join(":");
 }
 
 export function useAlphaState() {
   const [state, setState] = useState<AlphaState>(EMPTY_STATE);
+  const [loading, setLoading] = useState(true);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [metricHistory, setMetricHistory] = useState<Record<string, number[]>>({});
   const [pulseKey, setPulseKey] = useState(0);
+  const fingerprintRef = useRef("");
+  const liveRef = useRef(false);
 
-  const applyState = useCallback((data: AlphaState) => {
+  const applyState = useCallback((data: AlphaState, opts?: ApplyOptions) => {
+    const force = opts?.force ?? false;
+    const fp = stateFingerprint(data);
+
+    if (!force && fp === fingerprintRef.current) {
+      return;
+    }
+
+    fingerprintRef.current = fp;
+    liveRef.current = Boolean(data.live);
+    setRuntimeTailscaleHttps(data.tailscale_https_url);
+
     setState(data);
     setConnected(Boolean(data.live));
     setError(null);
-    if (!data.live) {
-      setMetricHistory({});
-      return;
-    }
+
     if (data.orb_pulse) setPulseKey((k) => k + 1);
+
     const m = data.metrics;
-    if (m) {
+    if (m && data.live) {
       setMetricHistory((prev) => {
         let next = prev;
-        next = pushHist(next, "sessions", m.sessions);
-        next = pushHist(next, "agents", m.agents);
-        next = pushHist(next, "tools", m.tools);
+        next = pushHist(next, "toolsets", m.toolsets ?? 0);
         next = pushHist(next, "skills", m.skills);
+        next = pushHist(next, "tools", m.tools);
+        next = pushHist(next, "plugins", m.plugins ?? 0);
+        next = pushHist(next, "sessions", m.sessions);
         next = pushHist(next, "events", m.events_per_min);
-        return next;
+        return next === prev ? prev : next;
       });
     }
   }, []);
 
   const reconnect = useCallback(async () => {
     try {
-      const data = await fetchState();
-      applyState(data);
-      await fetch(`${API_BASE}/api/config`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
+      setLoading(true);
+      fingerprintRef.current = "";
+      const reconnected = await reconnectRuntime();
+      if (reconnected?.state) {
+        applyState(reconnected.state, { force: true });
+      } else {
+        const data = await fetchState();
+        applyState(data, { force: true });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Reconnect failed");
+    } finally {
+      setLoading(false);
     }
   }, [applyState]);
 
@@ -98,13 +138,16 @@ export function useAlphaState() {
     let ws: WebSocket | null = null;
     let timer: ReturnType<typeof setTimeout>;
     let cancelled = false;
+    let backoff = 2000;
 
-    const connect = async () => {
+    const connect = () => {
       if (cancelled) return;
       try {
-        const wsUrl = await resolveWsUrl();
-        ws = new WebSocket(wsUrl);
-        ws.onopen = () => setError(null);
+        ws = new WebSocket(wsStateUrl());
+        ws.onopen = () => {
+          setError(null);
+          backoff = 2000;
+        };
         ws.onmessage = (ev) => {
           try {
             applyState(JSON.parse(ev.data));
@@ -114,23 +157,22 @@ export function useAlphaState() {
         };
         ws.onerror = () => setError("WebSocket error");
         ws.onclose = () => {
-          timer = setTimeout(() => {
-            void connect();
-          }, 3000);
+          timer = setTimeout(connect, backoff);
+          backoff = Math.min(backoff * 1.5, 10000);
         };
       } catch (e) {
         setError(e instanceof Error ? e.message : "WS failed");
-        timer = setTimeout(() => {
-          void connect();
-        }, 3000);
+        timer = setTimeout(connect, backoff);
       }
     };
 
+    setLoading(true);
     fetchState()
-      .then(applyState)
+      .then((data) => applyState(data, { force: true }))
       .catch((e) => setError(e instanceof Error ? e.message : "API offline"))
       .finally(() => {
-        void connect();
+        setLoading(false);
+        connect();
       });
 
     return () => {
@@ -140,5 +182,5 @@ export function useAlphaState() {
     };
   }, [applyState]);
 
-  return { state, connected, error, reconnect, metricHistory, pulseKey };
-}
+  return { state, loading, connected, error, reconnect, metricHistory, pulseKey };
+};

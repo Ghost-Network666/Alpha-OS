@@ -1,205 +1,228 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
+import type { McpPanel as McpPanelData } from "@/types/state";
 import { refreshMcp } from "@/lib/api";
-import type { McpPanel as McpPanelState } from "@/types/state";
 
 interface McpPanelProps {
-  mcp: McpPanelState;
-  runtime?: string;
-  onRefresh: () => void;
-  compact?: boolean;
+  mcp: McpPanelData;
+  categoryFilter?: (category: string) => boolean;
+  onRefresh?: () => void;
 }
 
-function sourceLabel(source?: string) {
-  if (source === "hermes") return "Hermes";
-  if (source === "openclaw") return "OpenClaw";
-  if (source === "override") return "override";
-  return source ?? "runtime";
-}
-
-function statusClass(server: McpPanelState["servers"][number]) {
-  if (server.probeable === false) return "text-cyan-500";
-  return server.connected ? "text-emerald-400" : "text-amber-500";
-}
-
-function statusText(server: McpPanelState["servers"][number]) {
-  if (server.probeable === false) return "remote · runtime";
-  return server.connected ? "stdio · online" : "stdio · offline";
-}
-
-export function McpPanel({ mcp, runtime, onRefresh, compact = false }: McpPanelProps) {
-  const [expanded, setExpanded] = useState<string | null>(null);
+export const McpPanel = memo(function McpPanel({
+  mcp,
+  categoryFilter,
+  onRefresh,
+}: McpPanelProps) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [query, setQuery] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<"all" | "online" | "offline">("all");
+
+  const toggle = (name: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const filteredServers = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return mcp.servers
+      .map((s) => {
+        let tools = (s.tools ?? []).filter((t) => {
+          if (categoryFilter && t.category && !categoryFilter(t.category)) return false;
+          if (statusFilter === "online" && t.status !== "online") return false;
+          if (statusFilter === "offline" && t.status !== "offline") return false;
+          if (!q) return true;
+          return (
+            t.name.toLowerCase().includes(q) ||
+            (t.human_label ?? "").toLowerCase().includes(q) ||
+            (t.description ?? "").toLowerCase().includes(q)
+          );
+        });
+        return { ...s, tools };
+      })
+      .filter(
+        (s) =>
+          s.tools.length > 0 ||
+          (!q && statusFilter === "all") ||
+          s.name.toLowerCase().includes(q)
+      );
+  }, [mcp.servers, query, statusFilter, categoryFilter]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
       await refreshMcp();
-      onRefresh();
+      onRefresh?.();
     } finally {
       setRefreshing(false);
     }
   };
 
-  const summary =
-    mcp.summary ??
-    (mcp.server_count
-      ? `${mcp.server_count} server(s) · ${mcp.tool_count} tools`
-      : "No MCP servers configured");
+  const serversOn = mcp.servers_online ?? mcp.servers.filter((s) => s.connected).length;
+  const serversOff = mcp.servers_offline ?? mcp.server_count - serversOn;
+  const toolsOn = mcp.tools_online ?? 0;
+  const toolsOff = mcp.tools_offline ?? 0;
 
   return (
-    <section className="rounded-2xl border border-cyan-900/25 bg-[#0d0d14]/80 p-4">
-      <div className="mb-2 flex items-start justify-between gap-2">
+    <section className="flex min-h-0 flex-1 flex-col rounded-2xl border border-cyan-900/25 bg-[#0d0d14]/80 p-4">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">
+          MCP Tools
+        </span>
+        <span
+          className={`rounded-full border px-2 py-px text-[9px] ${
+            mcp.connected
+              ? "border-emerald-800 text-emerald-500"
+              : "border-amber-800 text-amber-500"
+          }`}
+        >
+          {mcp.connected ? "LIVE" : "OFFLINE"}
+        </span>
+      </div>
+
+      <div className="mb-2 grid grid-cols-2 gap-1 text-[9px] text-slate-500">
         <div>
-          <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">
-            MCP Servers
-          </span>
-          <p className="mt-1 text-[10px] leading-relaxed text-slate-600">
-            Stdio servers from your Hermes/OpenClaw config — same subprocesses your
-            agents launch.
-          </p>
+          Servers{" "}
+          <span className="text-[#00ff88]">{serversOn} on</span>
+          {serversOff > 0 && (
+            <>
+              {" "}
+              · <span className="text-amber-500">{serversOff} off</span>
+            </>
+          )}
         </div>
+        <div className="text-right">
+          Tools{" "}
+          <span className="text-[#00ff88]">{toolsOn} on</span>
+          {toolsOff > 0 && (
+            <>
+              {" "}
+              · <span className="text-amber-500">{toolsOff} off</span>
+            </>
+          )}
+        </div>
+      </div>
+
+      {(mcp.categories ?? []).length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1">
+          {(mcp.categories ?? []).map((c) => (
+            <span
+              key={c.name}
+              className="rounded border border-slate-800 px-1.5 py-px text-[8px] text-slate-600"
+            >
+              {c.name}{" "}
+              <span className="text-[#00ff88]">{c.online}</span>/
+              <span className="text-slate-500">{c.total}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className="mb-2 flex flex-wrap gap-1">
+        {(["all", "online", "offline"] as const).map((f) => (
+          <button
+            key={f}
+            type="button"
+            onClick={() => setStatusFilter(f)}
+            className={`rounded px-1.5 py-0.5 text-[9px] uppercase ${
+              statusFilter === f
+                ? "bg-cyan-950/80 text-cyan-400"
+                : "text-slate-600 hover:text-slate-400"
+            }`}
+          >
+            {f}
+          </button>
+        ))}
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search…"
+          className="min-w-0 flex-1 rounded border border-slate-800 bg-[#0a0a0f] px-2 py-0.5 text-[10px]"
+        />
         <button
           type="button"
           onClick={handleRefresh}
           disabled={refreshing}
-          className="shrink-0 text-[9px] text-cyan-600 hover:text-cyan-400 disabled:opacity-50"
+          className="text-[9px] text-cyan-600 disabled:opacity-50"
         >
-          {refreshing ? "…" : "Probe"}
+          {refreshing ? "…" : "↻"}
         </button>
       </div>
 
-      <div className="mb-3 flex flex-wrap items-center gap-2 text-[9px]">
-        <span
-          className={`rounded-full border px-2 py-px ${
-            mcp.connected
-              ? "border-emerald-900/60 text-emerald-500"
-              : "border-slate-800 text-slate-500"
-          }`}
-        >
-          {summary}
-        </span>
-        {runtime && runtime !== "offline" && (
-          <span className="font-mono text-slate-600">runtime: {runtime}</span>
-        )}
-        {(mcp.stdio_count ?? 0) > 0 && (
-          <span className="text-slate-600">{mcp.stdio_count} stdio</span>
-        )}
-        {(mcp.remote_count ?? 0) > 0 && (
-          <span className="text-slate-600">{mcp.remote_count} remote</span>
-        )}
-      </div>
-
-      {mcp.error && !mcp.servers.length && (
-        <p className="mb-3 text-[10px] leading-relaxed text-amber-600/90">{mcp.error}</p>
+      {mcp.error && (
+        <p className="mb-2 rounded border border-amber-900/40 bg-amber-950/20 px-2 py-1 text-[10px] text-amber-500/90">
+          {mcp.error}
+        </p>
       )}
 
-      <div className={`space-y-2 overflow-y-auto text-[10px] ${compact ? "max-h-48" : "max-h-72"}`}>
-        {mcp.servers.length === 0 ? (
-          <div className="space-y-2 text-[10px] leading-relaxed text-slate-600">
-            <p>Add stdio MCP servers to the same config files Hermes or OpenClaw reads:</p>
-            <div className="rounded-lg border border-slate-800 bg-[#0a0a0f]/60 px-2 py-2 font-mono">
-              <div className="text-cyan-800">~/.hermes/config.yaml</div>
-              <pre className="mt-1 whitespace-pre-wrap text-slate-500">{`mcp_servers:
-  filesystem:
-    command: npx
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "/path"]`}</pre>
-            </div>
-            <div className="rounded-lg border border-slate-800 bg-[#0a0a0f]/60 px-2 py-2 font-mono">
-              <div className="text-cyan-800">~/.openclaw/openclaw.json</div>
-              <pre className="mt-1 whitespace-pre-wrap text-slate-500">{`"mcp": {
-  "servers": {
-    "docs": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-fetch"]
-    }
-  }
-}`}</pre>
-            </div>
-          </div>
+      <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain">
+        {filteredServers.length === 0 ? (
+          <p className="text-[10px] text-slate-600">No tools match your filters.</p>
         ) : (
-          mcp.servers.map((server) => {
-            const open = expanded === server.name;
+          filteredServers.map((s) => {
+            const open = expanded.has(s.name);
+            const tools = s.tools ?? [];
             return (
               <div
-                key={server.name}
-                className="rounded-lg border border-slate-800/60 bg-[#0a0a0f]/50 px-2 py-2"
+                key={s.name}
+                className="rounded-lg border border-slate-800/60 bg-[#0a0a0f]/50"
               >
                 <button
                   type="button"
-                  onClick={() => setExpanded(open ? null : server.name)}
-                  className="flex w-full items-start justify-between gap-2 text-left"
+                  onClick={() => toggle(s.name)}
+                  className="flex w-full items-center justify-between px-2 py-1.5 text-left"
                 >
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-slate-200">{server.name}</span>
-                      <span className="text-[9px] text-slate-600">
-                        {sourceLabel(server.source)}
-                      </span>
-                    </div>
-                    {server.command_preview && (
-                      <div className="mt-1 truncate font-mono text-[9px] text-slate-600">
-                        {server.command_preview}
-                      </div>
-                    )}
-                    {server.url && (
-                      <div className="mt-1 truncate font-mono text-[9px] text-slate-600">
-                        {server.url}
-                      </div>
-                    )}
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <div className={statusClass(server)}>{statusText(server)}</div>
-                    <div className="text-slate-600">
-                      {server.probeable === false
-                        ? "listed"
-                        : `${server.tool_count} tools`}
-                    </div>
-                  </div>
+                  <span className="truncate text-[11px] text-slate-300">
+                    {open ? "▾" : "▸"} {s.name}
+                    <span className="ml-1 text-[9px] text-slate-600">({s.source})</span>
+                  </span>
+                  <span className="shrink-0 text-[9px]">
+                    <span className={s.connected ? "text-[#00ff88]" : "text-amber-500"}>
+                      {s.connected ? "● online" : "○ offline"}
+                    </span>
+                  </span>
                 </button>
-
+                {s.error && !s.connected && (
+                  <p className="border-t border-slate-800/50 px-2 py-1 text-[9px] text-amber-500/80">
+                    {s.error}
+                  </p>
+                )}
                 {open && (
-                  <div className="mt-2 space-y-2 border-t border-slate-800/60 pt-2">
-                    {server.note && (
-                      <p className="text-[9px] leading-relaxed text-slate-500">{server.note}</p>
-                    )}
-                    {server.error && server.probeable !== false && (
-                      <p className="text-[9px] leading-relaxed text-amber-600/90">
-                        {server.error}
-                      </p>
-                    )}
-                    {server.env_keys && server.env_keys.length > 0 && (
-                      <p className="text-[9px] text-slate-600">
-                        env: {server.env_keys.join(", ")}
-                      </p>
-                    )}
-                    {server.config_path && (
-                      <p className="truncate font-mono text-[9px] text-slate-600">
-                        {server.config_path}
-                      </p>
-                    )}
-                    {server.tools && server.tools.length > 0 ? (
-                      <ul className="max-h-32 space-y-1 overflow-y-auto">
-                        {server.tools.map((tool) => (
-                          <li
-                            key={tool.name}
-                            className="rounded border border-slate-800/40 px-2 py-1"
+                  <div className="max-h-48 overflow-y-auto border-t border-slate-800/50 px-2 py-1">
+                    {tools.map((t) => (
+                      <div
+                        key={`${s.name}-${t.name}`}
+                        className="border-b border-slate-900/50 py-1 last:border-0"
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-[10px] text-slate-300">
+                            {t.human_label ?? t.name}
+                          </span>
+                          <span
+                            className={`shrink-0 text-[8px] font-bold uppercase ${
+                              t.status === "online"
+                                ? "text-[#00ff88]"
+                                : "text-amber-600"
+                            }`}
                           >
-                            <div className="font-mono text-[9px] text-cyan-700/90">
-                              {tool.name}
-                            </div>
-                            {tool.description && (
-                              <div className="text-[9px] text-slate-600">
-                                {tool.description}
-                              </div>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : server.probeable !== false ? (
-                      <p className="text-[9px] italic text-slate-600">No tools discovered</p>
-                    ) : null}
+                            {t.status ?? "offline"}
+                          </span>
+                        </div>
+                        <div className="font-mono text-[9px] text-slate-700">{t.name}</div>
+                        {t.category && (
+                          <span className="text-[8px] uppercase text-cyan-900">{t.category}</span>
+                        )}
+                        {t.issue && (
+                          <p className="text-[9px] text-amber-600/80">{t.issue}</p>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -207,27 +230,6 @@ export function McpPanel({ mcp, runtime, onRefresh, compact = false }: McpPanelP
           })
         )}
       </div>
-
-      {!compact && (mcp.config_paths?.length ?? 0) > 0 && (
-        <div className="mt-3 border-t border-slate-800/50 pt-2">
-          <div className="mb-1 text-[9px] uppercase tracking-wider text-slate-600">
-            Config sources
-          </div>
-          <div className="space-y-1">
-            {mcp.config_paths!.map((path) => (
-              <div
-                key={`${path.runtime}-${path.path}`}
-                className="flex items-center justify-between gap-2 font-mono text-[9px]"
-              >
-                <span className="truncate text-slate-600">{path.path}</span>
-                <span className={path.exists ? "text-emerald-600" : "text-slate-700"}>
-                  {path.exists ? path.key : "missing"}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </section>
   );
-}
+});

@@ -10,12 +10,17 @@ interface CommandPanelProps {
   orbPulse: boolean;
   hasActivity: boolean;
   wakeStatus?: WakeWordStatus;
+  wakeDetail?: string;
   wakeWord?: string;
   onLog: (msg: string, who?: string) => void;
   onReply?: (reply: string) => void;
 }
 
-function wakeStatusLabel(status: WakeWordStatus | undefined, wakeWord: string): string {
+function wakeStatusLabel(
+  status: WakeWordStatus | undefined,
+  wakeWord: string,
+  detail?: string
+): string {
   switch (status) {
     case "loading":
       return "Initializing wake word engine…";
@@ -24,7 +29,7 @@ function wakeStatusLabel(status: WakeWordStatus | undefined, wakeWord: string): 
     case "capturing":
       return "Wake word detected — speak your command";
     case "error":
-      return "Wake word unavailable — use text input";
+      return detail ?? "Wake word unavailable — use text input";
     case "unsupported":
       return "Voice unsupported in this browser";
     default:
@@ -37,6 +42,7 @@ export function CommandPanel({
   orbPulse,
   hasActivity,
   wakeStatus = "idle",
+  wakeDetail,
   wakeWord = "hey alpha",
   onLog,
   onReply,
@@ -89,7 +95,7 @@ export function CommandPanel({
                     : "bg-slate-600"
               }`}
             />
-            {wakeStatusLabel(wakeStatus, wakeWord)}
+            {wakeStatusLabel(wakeStatus, wakeWord, wakeDetail)}
           </div>
         </div>
       </div>

@@ -6,35 +6,22 @@ interface TopBarProps {
   connected: boolean;
   runtime: string;
   hermesConnected: boolean;
+  gatewayOnline?: boolean;
   openclawConnected?: boolean;
   onReconnect: () => void;
   onSettings: () => void;
-}
-
-function statusLabel(
-  connected: boolean,
-  runtime: string,
-  hermesConnected: boolean,
-  openclawConnected: boolean
-): string {
-  if (connected) {
-    if (runtime === "openclaw") return "● OpenClaw Connected";
-    if (runtime === "hermes") return "● Hermes Connected";
-    return "● Runtime Connected";
-  }
-  if (hermesConnected && openclawConnected) return "○ Gateways Partial";
-  if (hermesConnected) return "○ Hermes Only";
-  if (openclawConnected) return "○ OpenClaw Only";
-  return "○ No Runtime";
+  onCustomizeView?: () => void;
 }
 
 export function TopBar({
   connected,
   runtime,
   hermesConnected,
-  openclawConnected = false,
+  gatewayOnline,
+  openclawConnected,
   onReconnect,
   onSettings,
+  onCustomizeView,
 }: TopBarProps) {
   const [now, setNow] = useState<Date | null>(null);
 
@@ -44,18 +31,18 @@ export function TopBar({
     return () => clearInterval(id);
   }, []);
 
-  const label = statusLabel(
-    connected,
-    runtime,
-    hermesConnected,
-    openclawConnected
-  );
+  const online = gatewayOnline ?? hermesConnected;
+  const statusLabel = connected
+    ? online
+      ? "● Gateway LIVE"
+      : "○ Gateway OFFLINE"
+    : "○ No Runtime";
 
   const statusClass = connected
-    ? "border-[#00ff88]/40 bg-[#00ff88]/10 text-[#00ff88]"
-    : hermesConnected || openclawConnected
-      ? "border-amber-500/40 bg-amber-500/10 text-amber-400"
-      : "border-[#ff3366]/40 bg-[#ff3366]/10 text-[#ff3366]";
+    ? online
+      ? "border-[#00ff88]/40 bg-[#00ff88]/10 text-[#00ff88]"
+      : "border-amber-600/40 bg-amber-950/30 text-amber-400"
+    : "border-[#ff3366]/40 bg-[#ff3366]/10 text-[#ff3366]";
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-cyan-900/30 bg-[#0a0a0f]/90 px-4 backdrop-blur-md">
@@ -71,9 +58,9 @@ export function TopBar({
         <span
           className={`rounded-full border px-3 py-1 text-xs font-semibold ${statusClass}`}
         >
-          {label}
+          {statusLabel}
         </span>
-        {runtime !== "offline" && connected && (
+        {runtime !== "offline" && (
           <span className="hidden text-[10px] uppercase tracking-wider text-slate-600 sm:inline">
             {runtime}
           </span>
@@ -99,6 +86,15 @@ export function TopBar({
               })}
             </div>
           </div>
+        )}
+        {onCustomizeView && (
+          <button
+            type="button"
+            onClick={onCustomizeView}
+            className="rounded-lg border border-slate-700/80 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400 transition hover:border-cyan-700 hover:text-cyan-400"
+          >
+            View
+          </button>
         )}
         <button
           type="button"

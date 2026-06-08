@@ -1,13 +1,20 @@
 "use client";
 
+import { memo } from "react";
 import type { AlphaState } from "@/types/state";
-import { McpPanel } from "./McpPanel";
+import { McpPanel } from "@/components/McpPanel";
+import { McpDataWidgets } from "@/components/McpDataWidgets";
 
 interface SidePanelsProps {
   tailscale: AlphaState["tailscale"];
   integrations: AlphaState["integrations"];
   mcp: AlphaState["mcp"];
-  runtime?: string;
+  gatewayOnline?: boolean;
+  showTailscale?: boolean;
+  showIntegrations?: boolean;
+  showMcpTools?: boolean;
+  showMcpData?: boolean;
+  mcpCategoryFilter?: (category: string) => boolean;
   onMcpRefresh: () => void;
 }
 
@@ -21,7 +28,7 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-cyan-900/25 bg-[#0d0d14]/80 p-4">
+    <section className="shrink-0 rounded-2xl border border-cyan-900/25 bg-[#0d0d14]/80 p-4">
       <div className="mb-2 flex items-center justify-between">
         <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">
           {title}
@@ -33,81 +40,79 @@ function Panel({
   );
 }
 
-export function SidePanels({
+export const SidePanels = memo(function SidePanels({
   tailscale,
   integrations,
   mcp,
-  runtime,
+  gatewayOnline = true,
+  showTailscale = true,
+  showIntegrations = true,
+  showMcpTools = true,
+  showMcpData = true,
+  mcpCategoryFilter,
   onMcpRefresh,
 }: SidePanelsProps) {
+  const widgets = (mcp.widgets ?? []).filter(
+    (w) => !mcpCategoryFilter || mcpCategoryFilter(w.category)
+  );
+
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto">
-      <Panel
-        title="Tailscale"
-        badge={
-          <span
-            className={`rounded-full border px-2 py-px text-[9px] ${
-              tailscale.available
-                ? "border-emerald-800 text-emerald-500"
-                : "border-slate-700 text-slate-500"
-            }`}
-          >
-            {tailscale.available ? tailscale.backend_state : "unavailable"}
-          </span>
-        }
-      >
-        <div className="font-mono text-xs text-slate-300">
-          {tailscale.hostname ?? tailscale.self_ip ?? "—"}
-        </div>
-        <div className="mt-2 max-h-24 space-y-1 overflow-y-auto text-[10px] text-slate-500">
-          {(tailscale.peers ?? []).slice(0, 6).map((p, i) => (
-            <div key={i} className="truncate">
-              {p.hostname ?? p.ip ?? "peer"}
-            </div>
-          ))}
-          {!tailscale.peers?.length && (
-            <span className="italic text-slate-700">No peers</span>
+    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain">
+      {showTailscale && (
+        <Panel
+          title="Tailscale"
+          badge={
+            <span
+              className={`rounded-full border px-2 py-px text-[9px] ${
+                tailscale.available
+                  ? "border-emerald-800 text-emerald-500"
+                  : "border-slate-700 text-slate-500"
+              }`}
+            >
+              {tailscale.available ? tailscale.backend_state : "unavailable"}
+            </span>
+          }
+        >
+          <div className="font-mono text-xs text-slate-300">
+            {tailscale.hostname ?? tailscale.self_ip ?? "—"}
+          </div>
+        </Panel>
+      )}
+
+      {showIntegrations && (
+        <Panel
+          title="Integrations"
+          badge={
+            <span
+              className={`rounded-full border px-2 py-px text-[9px] ${
+                integrations.connected && gatewayOnline
+                  ? "border-emerald-800 text-emerald-500"
+                  : "border-amber-800 text-amber-500"
+              }`}
+            >
+              {integrations.connected && gatewayOnline ? "LIVE" : "OFFLINE"}
+            </span>
+          }
+        >
+          {integrations.error && !gatewayOnline && (
+            <p className="mb-1 text-[10px] text-amber-500/90">{integrations.error}</p>
           )}
-        </div>
-      </Panel>
-
-      <Panel
-        title="Integrations"
-        badge={
-          <span
-            className={`rounded-full border px-2 py-px text-[9px] ${
-              integrations.connected
-                ? "border-emerald-800 text-emerald-500"
-                : "border-amber-800 text-amber-500"
-            }`}
-          >
-            {integrations.connected ? "LIVE" : "OFFLINE"}
-          </span>
-        }
-      >
-        <div className="space-y-2 text-[10px] text-slate-500">
-          <div>
-            <span className="text-slate-600">Toolsets: </span>
-            {integrations.toolsets.length
-              ? integrations.toolsets
-                  .slice(0, 4)
-                  .map((t) => t.name ?? t.label)
-                  .join(", ")
-              : "—"}
+          <div className="text-[10px] text-slate-500">
+            Hermes toolsets {integrations.toolsets.length} · skills{" "}
+            {integrations.skills.length}
           </div>
-          <div>
-            <span className="text-slate-600">Skills: </span>
-            {integrations.skills.length
-              ? integrations.skills
-                  .slice(0, 4)
-                  .map((s) => s.name)
-                  .join(", ")
-              : "—"}
-          </div>
-        </div>
-      </Panel>
+        </Panel>
+      )}
 
-      <McpPanel mcp={mcp} runtime={runtime} onRefresh={onMcpRefresh} compact />
+      {showMcpData && <McpDataWidgets widgets={widgets} onRefresh={onMcpRefresh} />}
+
+      {showMcpTools && (
+        <McpPanel
+          mcp={mcp}
+          categoryFilter={mcpCategoryFilter}
+          onRefresh={onMcpRefresh}
+        />
+      )}
     </div>
   );
-}
+});
