@@ -12,6 +12,7 @@ from typing import Any, Callable, Optional
 import websockets
 from websockets.asyncio.client import connect as ws_connect
 
+from alpha_os import __version__
 from alpha_os.bridges.detector import color_for_index
 
 logger = logging.getLogger("alpha_os.openclaw")
@@ -39,7 +40,7 @@ class OpenClawBridge:
         self._recv_task: Optional[asyncio.Task] = None
 
     def _headers(self) -> dict[str, str]:
-        return {"User-Agent": "alpha-os/0.1.0"}
+        return {"User-Agent": f"alpha-os/{__version__}"}
 
     async def connect(self) -> bool:
         try:
@@ -79,7 +80,7 @@ class OpenClawBridge:
                 "maxProtocol": 4,
                 "client": {
                     "id": "alpha-os",
-                    "version": "0.1.0",
+                    "version": __version__,
                     "platform": "web",
                     "mode": "operator",
                 },
@@ -90,7 +91,7 @@ class OpenClawBridge:
                 "permissions": {},
                 "auth": {"token": self.token} if self.token else {},
                 "locale": "en-US",
-                "userAgent": "alpha-os/0.1.0",
+                "userAgent": f"alpha-os/{__version__}",
             },
         }
         await self._ws.send(json.dumps(connect_req))

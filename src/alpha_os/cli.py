@@ -12,7 +12,9 @@ from pathlib import Path
 
 from alpha_os import __version__
 from alpha_os.bridges.detector import detect_best, detect_hermes, detect_openclaw
-from alpha_os.config import CONFIG_DIR, load_config, save_config, set_key
+from alpha_os.config import CONFIG_DIR, inject_runtime_env, load_config, save_config, set_key
+
+inject_runtime_env()
 
 def _resolve_pkg_root() -> Path:
     here = Path(__file__).resolve().parent
@@ -148,22 +150,31 @@ async def cmd_setup(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_start(args: argparse.Namespace) -> int:
-    start_sh = PKG_ROOT / "scripts" / "start.sh"
+def _run_start_script(name: str) -> int:
+    start_sh = PKG_ROOT / "scripts" / name
     if not start_sh.exists():
-        _print("  scripts/start.sh not found — are you running from a repo clone?")
+        _print(f"  scripts/{name} not found — are you running from a repo clone?")
         _print("  Clone: git clone https://github.com/Ghost-Network666/Alpha-OS.git")
         _print("  Then:  ./install.sh && ./scripts/start.sh")
         return 1
     if not (PKG_ROOT / "frontend" / "node_modules").exists():
         _print("  Frontend not installed. Run: ./install.sh")
         return 1
-    _print("Starting Alpha OS (backend + frontend)…")
     try:
         subprocess.run(["bash", str(start_sh)], cwd=str(PKG_ROOT), check=False)
     except KeyboardInterrupt:
         pass
     return 0
+
+
+def cmd_start(_args: argparse.Namespace) -> int:
+    _print("Starting Alpha OS (dev — hot reload)…")
+    return _run_start_script("start.sh")
+
+
+def cmd_start_prod(_args: argparse.Namespace) -> int:
+    _print("Starting Alpha OS (production build)…")
+    return _run_start_script("start-prod.sh")
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
@@ -206,7 +217,9 @@ def main() -> None:
 
     sub.add_parser("doctor", help="Check gateway connectivity")
 
-    sub.add_parser("start", help="Start backend + Next.js frontend (repo clone)")
+    sub.add_parser("start", help="Start backend + Next.js frontend (dev mode)")
+
+    sub.add_parser("start-prod", help="Start backend + built Next.js frontend (production)")
 
     args = parser.parse_args()
     if args.cmd == "setup":
@@ -217,6 +230,8 @@ def main() -> None:
         raise SystemExit(cmd_serve(args))
     if args.cmd == "start":
         raise SystemExit(cmd_start(args))
+    if args.cmd == "start-prod":
+        raise SystemExit(cmd_start_prod(args))
 
     # Default: serve
     raise SystemExit(cmd_serve(argparse.Namespace(port=8080, host="127.0.0.1", open=True, voice=False)))

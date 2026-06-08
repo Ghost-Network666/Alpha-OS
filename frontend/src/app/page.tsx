@@ -7,6 +7,7 @@ import { ConnectScreen } from "@/components/ConnectScreen";
 import { GridBackground } from "@/components/GridBackground";
 import { MetricsBar } from "@/components/MetricsBar";
 import { SettingsDrawer } from "@/components/SettingsDrawer";
+import { McpPanel } from "@/components/McpPanel";
 import { SidePanels } from "@/components/SidePanels";
 import { TelemetryPanel } from "@/components/TelemetryPanel";
 import { TopBar } from "@/components/TopBar";
@@ -95,22 +96,33 @@ export default function DashboardPage() {
       {live && (
         <MetricsBar
           metrics={state.metrics}
-          polymarket={state.polymarket}
+          mcp={state.mcp}
           history={metricHistory}
           pulseKey={pulseKey}
         />
       )}
 
       {!live ? (
-        <ConnectScreen
-          hermesInstalled={Boolean(state.hermes_installed)}
-          openclawInstalled={Boolean(state.openclaw_installed)}
-          hermesConnected={state.hermes_connected}
-          openclawConnected={state.openclaw_connected}
-          runtimePreference={state.runtime_preference}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onReconnect={reconnect}
-        />
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 lg:grid-cols-12">
+          <div className="lg:col-span-8">
+            <ConnectScreen
+              hermesInstalled={Boolean(state.hermes_installed)}
+              openclawInstalled={Boolean(state.openclaw_installed)}
+              hermesConnected={state.hermes_connected}
+              openclawConnected={state.openclaw_connected}
+              runtimePreference={state.runtime_preference}
+              onOpenSettings={() => setSettingsOpen(true)}
+              onReconnect={reconnect}
+            />
+          </div>
+          <div className="min-h-0 lg:col-span-4">
+            <McpPanel
+              mcp={state.mcp}
+              runtime={state.runtime}
+              onRefresh={reconnect}
+            />
+          </div>
+        </div>
       ) : (
         <main className="grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 lg:grid-cols-12">
           <div className="flex min-h-0 flex-col lg:col-span-3">
@@ -137,9 +149,10 @@ export default function DashboardPage() {
               tailscale={state.tailscale}
               integrations={state.integrations}
               mcp={state.mcp}
+              runtime={state.runtime}
               onMcpRefresh={async () => {
                 await fetchState();
-                onLog("MCP refreshed", "system");
+                onLog("MCP stdio probe complete", "system");
               }}
             />
           </div>

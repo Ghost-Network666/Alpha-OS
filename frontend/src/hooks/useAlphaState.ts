@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { fetchState, wsStateUrl } from "@/lib/api";
+import { API_BASE, fetchState, resolveWsUrl } from "@/lib/api";
 import type { AlphaState } from "@/types/state";
 
 const EMPTY_METRICS: AlphaState["metrics"] = {
@@ -22,17 +22,19 @@ const EMPTY_STATE: AlphaState = {
   hermes_connected: false,
   openclaw_connected: false,
   metrics: EMPTY_METRICS,
-  polymarket: {
-    connected: false,
-    pnl_today: null,
-    open_positions: null,
-    win_rate: null,
-  },
   live_events: [],
   event_seq: 0,
   orb_pulse: false,
   integrations: { connected: false, toolsets: [], skills: [], sessions: [] },
-  mcp: { connected: false, server_count: 0, tool_count: 0, servers: [] },
+  mcp: {
+    connected: false,
+    server_count: 0,
+    stdio_count: 0,
+    remote_count: 0,
+    tool_count: 0,
+    servers: [],
+    summary: null,
+  },
   tailscale: {
     available: false,
     backend_state: "unknown",
@@ -82,7 +84,7 @@ export function useAlphaState() {
     try {
       const data = await fetchState();
       applyState(data);
-      await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8080"}/api/config`, {
+      await fetch(`${API_BASE}/api/config`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
@@ -97,10 +99,11 @@ export function useAlphaState() {
     let timer: ReturnType<typeof setTimeout>;
     let cancelled = false;
 
-    const connect = () => {
+    const connect = async () => {
       if (cancelled) return;
       try {
-        ws = new WebSocket(wsStateUrl());
+        const wsUrl = await resolveWsUrl();
+        ws = new WebSocket(wsUrl);
         ws.onopen = () => setError(null);
         ws.onmessage = (ev) => {
           try {
@@ -111,18 +114,24 @@ export function useAlphaState() {
         };
         ws.onerror = () => setError("WebSocket error");
         ws.onclose = () => {
-          timer = setTimeout(connect, 3000);
+          timer = setTimeout(() => {
+            void connect();
+          }, 3000);
         };
       } catch (e) {
         setError(e instanceof Error ? e.message : "WS failed");
-        timer = setTimeout(connect, 3000);
+        timer = setTimeout(() => {
+          void connect();
+        }, 3000);
       }
     };
 
     fetchState()
       .then(applyState)
       .catch((e) => setError(e instanceof Error ? e.message : "API offline"))
-      .finally(() => connect());
+      .finally(() => {
+        void connect();
+      });
 
     return () => {
       cancelled = true;

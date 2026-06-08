@@ -20,35 +20,50 @@ export interface Metrics {
   toolsets?: number;
   skills: number;
   events_per_min: number;
+  mcp_servers?: number;
+  mcp_tools?: number;
 }
 
-export interface PolymarketMetrics {
-  connected: boolean;
-  server?: string;
-  tool_count?: number;
-  pnl_today: number | null;
-  open_positions: number | null;
-  win_rate: number | null;
+export interface McpConfigPath {
+  runtime: string;
+  path: string;
+  exists: boolean;
+  key: string;
 }
 
 export interface McpServer {
   name: string;
   connected: boolean;
   transport?: string;
+  probeable?: boolean;
   tool_count: number;
   tools?: { name: string; description?: string }[];
   error?: string | null;
   command?: string;
+  args?: string[];
+  command_preview?: string;
+  env_keys?: string[];
   source?: string;
+  config_path?: string;
+  url?: string;
+  auth?: string | null;
+  note?: string;
+  status?: string;
+  tool_policy?: { include?: unknown; exclude?: unknown } | null;
 }
 
 export interface McpPanel {
   connected: boolean;
   server_count: number;
+  stdio_count?: number;
+  remote_count?: number;
   tool_count: number;
   servers: McpServer[];
+  config_paths?: McpConfigPath[];
   sources?: string[];
+  runtime?: string;
   error?: string | null;
+  summary?: string | null;
 }
 
 export interface Integrations {
@@ -125,7 +140,6 @@ export interface AlphaState {
   hermes?: { connected: boolean; gateway_url?: string };
   openclaw?: { connected: boolean; gateway_url?: string };
   metrics: Metrics;
-  polymarket: PolymarketMetrics;
   live_events: LiveEvent[];
   event_seq: number;
   orb_pulse: boolean;

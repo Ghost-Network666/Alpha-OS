@@ -14,7 +14,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Alpha OS",
-  description: "Voice-first personal AI command center for Hermes + MCP",
+  description:
+    "Voice-first command center for Hermes and OpenClaw — stdio MCP from your runtime configs",
 };
 
 export default function RootLayout({

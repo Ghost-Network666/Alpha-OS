@@ -1,21 +1,41 @@
 import type { AlphaState } from "@/types/state";
+import { parseBootstrapWsUrl } from "@/lib/ws";
 
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+/** Same-origin — Next.js proxies /api/* to the backend using runtime dotenv */
+export const API_BASE = "";
+
+async function apiFetch(path: string, init: RequestInit = {}) {
+  return fetch(`${API_BASE}${path}`, init);
+}
+
+let cachedWsUrl: string | null = null;
+
+export function resetWsUrlCache(): void {
+  cachedWsUrl = null;
+}
+
+export async function resolveWsUrl(): Promise<string> {
+  if (cachedWsUrl) return cachedWsUrl;
+  const res = await apiFetch("/api/bootstrap", { cache: "no-store" });
+  if (!res.ok) throw new Error(`Bootstrap failed: ${res.status}`);
+  const data = await res.json();
+  cachedWsUrl = parseBootstrapWsUrl(data);
+  return cachedWsUrl;
+}
 
 export function wsStateUrl(): string {
-  const base = API_BASE.replace(/^http/, "ws");
-  return `${base}/ws/state`;
+  if (cachedWsUrl) return cachedWsUrl;
+  return "/api/bootstrap-pending";
 }
 
 export async function fetchState(): Promise<AlphaState> {
-  const res = await fetch(`${API_BASE}/api/state`, { cache: "no-store" });
+  const res = await apiFetch("/api/state", { cache: "no-store" });
   if (!res.ok) throw new Error(`State fetch failed: ${res.status}`);
   return res.json();
 }
 
 export async function sendCommand(command: string) {
-  const res = await fetch(`${API_BASE}/api/command`, {
+  const res = await apiFetch("/api/command", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ command }),
@@ -24,7 +44,7 @@ export async function sendCommand(command: string) {
 }
 
 export async function postConfig(body: Record<string, string | undefined>) {
-  const res = await fetch(`${API_BASE}/api/config`, {
+  const res = await apiFetch("/api/config", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -33,7 +53,7 @@ export async function postConfig(body: Record<string, string | undefined>) {
 }
 
 export async function refreshMcp() {
-  const res = await fetch(`${API_BASE}/api/mcp/refresh`, { method: "POST" });
+  const res = await apiFetch("/api/mcp/refresh", { method: "POST" });
   return res.json();
 }
 
@@ -59,7 +79,7 @@ export interface VoiceConfigPayload {
 }
 
 export async function postVoiceConfig(body: VoiceConfigPayload) {
-  const res = await fetch(`${API_BASE}/api/voice/config`, {
+  const res = await apiFetch("/api/voice/config", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -75,7 +95,7 @@ export async function fetchTtsAudio(
   const trimmed = text.trim();
   if (!trimmed) return null;
 
-  const res = await fetch(`${API_BASE}/api/voice/tts`, {
+  const res = await apiFetch("/api/voice/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text: trimmed, provider, voice }),

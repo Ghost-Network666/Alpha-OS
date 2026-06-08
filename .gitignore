@@ -11,7 +11,7 @@ openclaw_plugin/dist/
 venv/
 .env
 .env.*
-!.env.example
+frontend/.env.local
 *.db
 .DS_Store
 Thumbs.db

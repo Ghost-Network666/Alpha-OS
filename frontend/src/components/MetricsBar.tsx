@@ -5,19 +5,14 @@ import { MetricCard } from "./MetricCard";
 
 interface MetricsBarProps {
   metrics: AlphaState["metrics"];
-  polymarket: AlphaState["polymarket"];
+  mcp: AlphaState["mcp"];
   history: Record<string, number[]>;
   pulseKey?: number;
 }
 
-function fmt(value: number | null | undefined, suffix = ""): string {
-  if (value === null || value === undefined) return "—";
-  return `${value}${suffix}`;
-}
-
 export function MetricsBar({
   metrics,
-  polymarket,
+  mcp,
   history,
   pulseKey = 0,
 }: MetricsBarProps) {
@@ -54,34 +49,14 @@ export function MetricsBar({
     },
   ];
 
-  const polyCards = polymarket.connected
-    ? [
-        {
-          key: "pnl",
-          label: "P&L Today",
-          value: fmt(polymarket.pnl_today, polymarket.pnl_today != null ? "" : ""),
-          accent: "green" as const,
-          history: history.pnl ?? [],
-        },
-        {
-          key: "positions",
-          label: "Open Positions",
-          value: fmt(polymarket.open_positions),
-          accent: "cyan" as const,
-          history: history.positions ?? [],
-        },
-        {
-          key: "winrate",
-          label: "Win Rate",
-          value:
-            polymarket.win_rate != null
-              ? `${polymarket.win_rate}%`
-              : "—",
-          accent: "pink" as const,
-          history: history.winrate ?? [],
-        },
-      ]
-    : [];
+  if ((mcp.server_count ?? 0) > 0) {
+    cards.push({
+      key: "mcp_tools",
+      label: "MCP Tools",
+      value: mcp.tool_count,
+      accent: "green" as const,
+    });
+  }
 
   return (
     <div className="shrink-0 border-b border-slate-800/60 bg-[#0a0a0f]/80 px-4 py-2">
@@ -92,16 +67,6 @@ export function MetricsBar({
             label={c.label}
             value={c.value}
             history={history[c.key] ?? []}
-            accent={c.accent}
-            pulse={pulseKey > 0}
-          />
-        ))}
-        {polyCards.map((c) => (
-          <MetricCard
-            key={c.key}
-            label={c.label}
-            value={c.value}
-            history={c.history}
             accent={c.accent}
             pulse={pulseKey > 0}
           />

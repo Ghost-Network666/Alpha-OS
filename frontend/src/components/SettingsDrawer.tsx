@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { postConfig, postVoiceConfig } from "@/lib/api";
+import { API_BASE, postConfig, postVoiceConfig } from "@/lib/api";
 import type { VoiceConfig } from "@/types/state";
 
 interface SettingsDrawerProps {
@@ -80,7 +80,7 @@ export function SettingsDrawer({
     setTtsVoice(v.tts_voice ?? "en-US-AriaNeural");
     setSaveNote(null);
 
-    fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8080"}/api/config`)
+    fetch(`${API_BASE}/api/config`)
       .then((r) => r.json())
       .then((cfg) => {
         if (cfg.runtime) setRt(cfg.runtime);
@@ -369,11 +369,12 @@ export function SettingsDrawer({
 
           <div>
             <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">
-              MCP
+              MCP (stdio)
             </div>
             <p className="text-xs leading-relaxed text-slate-500">
-              Alpha OS probes <strong className="text-slate-400">stdio</strong>{" "}
-              MCP servers from your runtime configs.
+              Env: <code className="text-cyan-800">~/.hermes/.env</code> or{" "}
+              <code className="text-cyan-800">~/.openclaw/.env</code>. MCP stdio
+              servers are probed from runtime JSON configs below.
             </p>
             <ul className="mt-2 space-y-1.5 text-[10px] font-mono text-slate-600">
               <li className="rounded border border-slate-800 bg-[#0a0a0f] px-2 py-1.5">
@@ -385,6 +386,12 @@ export function SettingsDrawer({
                 <span className="text-cyan-700">mcp.servers</span>
               </li>
             </ul>
+            <p className="mt-2 text-[10px] text-slate-600">
+              After editing MCP config, reload in Hermes with{" "}
+              <code className="text-cyan-800">/reload-mcp</code> or restart the
+              OpenClaw gateway. Use <strong>Probe</strong> in the MCP panel to
+              re-check stdio servers.
+            </p>
           </div>
 
           <div>

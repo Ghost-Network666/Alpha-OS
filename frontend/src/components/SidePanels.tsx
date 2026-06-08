@@ -1,12 +1,13 @@
 "use client";
 
 import type { AlphaState } from "@/types/state";
-import { refreshMcp } from "@/lib/api";
+import { McpPanel } from "./McpPanel";
 
 interface SidePanelsProps {
   tailscale: AlphaState["tailscale"];
   integrations: AlphaState["integrations"];
   mcp: AlphaState["mcp"];
+  runtime?: string;
   onMcpRefresh: () => void;
 }
 
@@ -14,12 +15,10 @@ function Panel({
   title,
   badge,
   children,
-  action,
 }: {
   title: string;
   badge?: React.ReactNode;
   children: React.ReactNode;
-  action?: React.ReactNode;
 }) {
   return (
     <section className="rounded-2xl border border-cyan-900/25 bg-[#0d0d14]/80 p-4">
@@ -27,10 +26,7 @@ function Panel({
         <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">
           {title}
         </span>
-        <div className="flex items-center gap-2">
-          {badge}
-          {action}
-        </div>
+        {badge}
       </div>
       {children}
     </section>
@@ -41,13 +37,9 @@ export function SidePanels({
   tailscale,
   integrations,
   mcp,
+  runtime,
   onMcpRefresh,
 }: SidePanelsProps) {
-  const handleMcpRefresh = async () => {
-    await refreshMcp();
-    onMcpRefresh();
-  };
-
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto">
       <Panel
@@ -115,55 +107,7 @@ export function SidePanels({
         </div>
       </Panel>
 
-      <Panel
-        title="MCP Servers"
-        action={
-          <button
-            type="button"
-            onClick={handleMcpRefresh}
-            className="text-[9px] text-cyan-600 hover:text-cyan-400"
-          >
-            Refresh
-          </button>
-        }
-        badge={
-          <span className="font-mono text-[9px] text-slate-600">
-            {mcp.server_count}
-          </span>
-        }
-      >
-        <div className="max-h-40 space-y-2 overflow-y-auto text-[10px]">
-          {mcp.servers.length === 0 ? (
-            <p className="text-[10px] leading-relaxed text-slate-600">
-              No stdio servers — add{" "}
-              <code className="text-cyan-800">mcp_servers</code> to{" "}
-              <code className="text-cyan-800">~/.hermes/config.yaml</code>
-            </p>
-          ) : (
-            mcp.servers.map((s) => (
-              <div
-                key={s.name}
-                className="rounded-lg border border-slate-800/60 bg-[#0a0a0f]/50 px-2 py-1.5"
-              >
-                <div className="flex justify-between">
-                  <span className="text-slate-300">{s.name}</span>
-                  <span
-                    className={
-                      s.connected ? "text-[#00ff88]" : "text-slate-600"
-                    }
-                  >
-                    {s.connected ? "● stdio" : "○ stdio"}
-                  </span>
-                </div>
-                <div className="text-slate-600">
-                  {s.tool_count} tools
-                  {s.source ? ` · ${s.source}` : ""}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </Panel>
+      <McpPanel mcp={mcp} runtime={runtime} onRefresh={onMcpRefresh} compact />
     </div>
   );
 }

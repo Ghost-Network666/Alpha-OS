@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -24,11 +24,31 @@ from alpha_os.bridges.detector import (
     hermes_installed,
     openclaw_installed,
 )
-from alpha_os.config import get, load_config, set_hermes_env, set_key
+from alpha_os import __version__
+from alpha_os.auth import (
+    auth_enabled,
+    extract_token_from_request,
+    extract_token_from_websocket,
+    requires_auth,
+    token_valid,
+)
+from alpha_os.config import (
+    alpha_os_host,
+    alpha_os_port,
+    get,
+    inject_runtime_env,
+    load_config,
+    runtime_env_sources,
+    set_hermes_env,
+    set_key,
+)
+
+inject_runtime_env()
 from alpha_os.voice.hermes_sync import apply_voice_config, load_voice_config
 from alpha_os.core.alpha import Alpha
 from alpha_os.core.events import LiveEventBuffer
 from alpha_os.integrations.mcp_bridge import MCPRegistry
+from alpha_os.integrations.mcp_watcher import mcp_config_watch_loop
 from alpha_os.integrations.tailscale import TailscaleStatus
 
 logger = logging.getLogger("alpha_os.server")
@@ -85,12 +105,6 @@ def _empty_panel_state() -> dict[str, Any]:
             "exit_node": None,
             "peers": [],
         },
-        "polymarket": {
-            "connected": False,
-            "pnl_today": None,
-            "open_positions": None,
-            "win_rate": None,
-        },
     }
 HERMES_BRIDGE = HermesBridge()
 OPENCLAW_BRIDGE = OpenClawBridge()
@@ -101,6 +115,7 @@ _last_hermes_retry = 0.0
 _last_oc_retry = 0.0
 _active_runtime = "offline"
 _stream_tasks: list[asyncio.Task] = []
+_watcher_tasks: list[asyncio.Task] = []
 _voice_loop: Any = None
 
 
@@ -162,35 +177,10 @@ async def _init_bridges() -> None:
         _active_runtime = "offline"
         logger.info("No runtime connected — panels will start empty")
 
-
-def _polymarket_metrics(mcp_data: dict[str, Any]) -> dict[str, Any]:
-    """Surface Polymarket MCP when connected — values filled when tools respond."""
-    servers = mcp_data.get("servers") or []
-    poly = next(
-        (
-            s
-            for s in servers
-            if isinstance(s, dict)
-            and "polymarket" in str(s.get("name", "")).lower()
-            and s.get("connected")
-        ),
-        None,
-    )
-    if not poly:
-        return {
-            "connected": False,
-            "pnl_today": None,
-            "open_positions": None,
-            "win_rate": None,
-        }
-    return {
-        "connected": True,
-        "server": poly.get("name"),
-        "tool_count": poly.get("tool_count", 0),
-        "pnl_today": None,
-        "open_positions": None,
-        "win_rate": None,
-    }
+    try:
+        await MCP_REGISTRY.refresh(_active_runtime)
+    except Exception as e:
+        logger.warning("MCP refresh failed: %s", e)
 
 
 def _build_integrations() -> dict[str, Any]:
@@ -262,13 +252,16 @@ async def _build_state() -> dict[str, Any]:
     }
     data["live"] = live
 
+    mcp_data = MCP_REGISTRY.get_panel_data()
+    data["mcp"] = mcp_data
+
     if not live:
         data.update(_empty_panel_state())
+        data["mcp"] = mcp_data
     else:
         data["integrations"] = _build_integrations()
         data["tailscale"] = TAILSCALE.to_dict()
         toolsets = data["integrations"].get("toolsets", [])
-        mcp_data = MCP_REGISTRY.get_panel_data()
         tool_count = sum(
             len(ts.get("tools", [])) if isinstance(ts, dict) else 0 for ts in toolsets
         )
@@ -282,12 +275,12 @@ async def _build_state() -> dict[str, Any]:
             "toolsets": len(toolsets),
             "skills": len(data["integrations"].get("skills", [])),
             "events_per_min": LIVE_EVENTS.events_per_minute(),
+            "mcp_servers": mcp_data.get("server_count", 0),
+            "mcp_tools": mcp_data.get("tool_count", 0),
         }
-        data["polymarket"] = _polymarket_metrics(mcp_data)
         data["live_events"] = LIVE_EVENTS.get_recent(20)
         data["event_seq"] = LIVE_EVENTS.latest_seq()
         data["orb_pulse"] = LIVE_EVENTS.consume_pulse()
-        data["mcp"] = mcp_data
         data["memory"] = ALPHA.memory.to_summary()
     try:
         from alpha_os.voice import get_voice_providers
@@ -327,10 +320,14 @@ async def _refresh_openclaw_on_event() -> None:
 async def _mcp_refresh_loop() -> None:
     while True:
         try:
-            await MCP_REGISTRY.refresh()
+            await MCP_REGISTRY.refresh(_active_runtime)
         except Exception:
             pass
         await asyncio.sleep(60)
+
+
+async def _mcp_refresh_now() -> None:
+    await MCP_REGISTRY.refresh(_active_runtime)
 
 
 async def _hermes_event_stream() -> None:
@@ -389,10 +386,10 @@ async def lifespan(app: FastAPI):
     _start_event_streams()
     asyncio.create_task(_tailscale_loop())
     asyncio.create_task(_mcp_refresh_loop())
-    await MCP_REGISTRY.refresh()
+    _watcher_tasks.append(asyncio.create_task(mcp_config_watch_loop(_mcp_refresh_now)))
     await _start_voice_loop()
     yield
-    for task in _stream_tasks:
+    for task in _stream_tasks + _watcher_tasks:
         task.cancel()
     await _stop_voice_loop()
     await HERMES_BRIDGE.disconnect()
@@ -411,7 +408,7 @@ async def _tailscale_loop():
         await asyncio.sleep(60)
 
 
-app = FastAPI(title="Alpha OS", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Alpha OS", version=__version__, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -428,6 +425,14 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def api_auth_middleware(request, call_next):
+    path = request.url.path
+    if requires_auth(path) and not token_valid(extract_token_from_request(request)):
+        return JSONResponse({"ok": False, "error": "Unauthorized"}, status_code=401)
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def embed_headers(request, call_next):
     response = await call_next(request)
     if request.url.path in ("/", "/static/index.html", "/api/state"):
@@ -437,6 +442,46 @@ async def embed_headers(request, call_next):
         if "x-frame-options" in response.headers:
             del response.headers["x-frame-options"]
     return response
+
+
+@app.get("/health")
+async def health():
+    return {"ok": True, "service": "alpha-os", "version": __version__}
+
+
+@app.get("/ready")
+async def ready():
+    return {
+        "ok": True,
+        "runtime": _active_runtime,
+        "auth": auth_enabled(),
+        "mcp_servers": MCP_REGISTRY.get_panel_data().get("server_count", 0),
+    }
+
+
+@app.get("/api/bootstrap")
+async def api_bootstrap():
+    """Frontend connection info — env injected from ~/.hermes/.env and ~/.openclaw/.env."""
+    import os
+
+    inject_runtime_env(_active_runtime)
+    host = alpha_os_host()
+    port = alpha_os_port()
+    from alpha_os.auth import api_token as _api_token
+
+    token = _api_token()
+    ws_url = f"ws://{host}:{port}/ws/state"
+    if token:
+        ws_url = f"{ws_url}?token={token}"
+    return {
+        "ok": True,
+        "api_url": f"http://{host}:{port}",
+        "ws_url": ws_url,
+        "auth_required": bool(token),
+        "runtime": _active_runtime,
+        "env_sources": runtime_env_sources(_active_runtime),
+        "frontend_port": int(os.getenv("ALPHA_OS_FRONTEND_PORT", "3000")),
+    }
 
 
 if STATIC_DIR.exists():
@@ -701,7 +746,7 @@ async def api_mcp():
 
 @app.post("/api/mcp/refresh")
 async def api_mcp_refresh():
-    data = await MCP_REGISTRY.refresh()
+    data = await MCP_REGISTRY.refresh(_active_runtime)
     return {"ok": True, "mcp": data}
 
 
@@ -746,11 +791,15 @@ async def api_config_post(req: ConfigRequest):
             req.hermes_api_key or str(get("hermes.api_key", "")),
         )
     await _init_bridges()
+    await MCP_REGISTRY.refresh(_active_runtime)
     return {"ok": True, "config": load_config()}
 
 
 @app.websocket("/ws/state")
 async def ws_state(ws: WebSocket):
+    if auth_enabled() and not token_valid(extract_token_from_websocket(ws)):
+        await ws.close(code=1008, reason="Unauthorized")
+        return
     await ws.accept()
     try:
         while True:

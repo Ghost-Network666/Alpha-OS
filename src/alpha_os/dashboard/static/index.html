@@ -197,7 +197,7 @@
       </div>
       <div>
         <div class="section-title mb-2">MCP</div>
-        <p class="text-xs text-slate-500 leading-relaxed">Stdio MCP from runtime configs:</p>
+        <p class="text-xs text-slate-500 leading-relaxed">Same stdio MCP definitions Hermes/OpenClaw use — Alpha OS probes subprocess servers:</p>
         <ul class="text-[10px] font-mono text-slate-600 mt-2 space-y-1">
           <li><code class="text-cyan-700">~/.hermes/config.yaml</code> → mcp_servers</li>
           <li><code class="text-cyan-700">~/.openclaw/openclaw.json</code> → mcp.servers</li>
@@ -339,22 +339,34 @@ function renderMcp(mcp) {
   const el = document.getElementById("mcp-servers");
   const servers = mcp.servers || [];
   if (!servers.length) {
-    el.innerHTML = `<div class="text-[10px] text-slate-600 leading-relaxed">${mcp.error || "No stdio MCP — add mcp_servers to ~/.hermes/config.yaml"}</div>`;
+    el.innerHTML = `<div class="text-[10px] text-slate-600 leading-relaxed">${mcp.error || mcp.summary || "No MCP servers — add mcp_servers (Hermes) or mcp.servers (OpenClaw)"}</div>`;
     return;
   }
-  el.innerHTML = servers.map(s => `
+  el.innerHTML = servers.map(s => {
+    const remote = s.probeable === false;
+    const status = remote ? "remote · runtime" : (s.connected ? "stdio · online" : "stdio · offline");
+    const statusClass = remote ? "text-cyan-400" : (s.connected ? "text-emerald-400" : "text-amber-400");
+    const preview = s.command_preview || s.url || "";
+    const tools = (s.tools || []).slice(0, 6).map(t => `<div class="text-[9px] font-mono text-cyan-800">${t.name}</div>`).join("");
+    return `
     <div class="px-2 py-2 rounded-lg bg-[#050508] border border-slate-800">
-      <div class="flex justify-between">
-        <span class="text-slate-300">${s.name}</span>
-        <span class="${s.connected ? "text-emerald-400" : "text-amber-400"}">${s.connected ? "●" : "○"} stdio · ${s.tool_count || 0} tools</span>
+      <div class="flex justify-between gap-2">
+        <div class="min-w-0">
+          <span class="text-slate-300">${s.name}</span>
+          <span class="text-[9px] text-slate-600 ml-1">${s.source || ""}</span>
+          ${preview ? `<div class="text-[9px] text-slate-600 truncate mt-1 font-mono">${preview}</div>` : ""}
+        </div>
+        <span class="${statusClass} shrink-0 text-[10px]">${status}</span>
       </div>
-      ${s.error && !s.connected ? `<div class="text-[10px] text-slate-600 truncate mt-1">${s.error}</div>` : ""}
-    </div>
-  `).join("");
+      <div class="text-[10px] text-slate-600 mt-1">${remote ? "listed" : `${s.tool_count || 0} tools`}</div>
+      ${s.error && !remote ? `<div class="text-[10px] text-amber-500/80 truncate mt-1">${s.error}</div>` : ""}
+      ${tools ? `<div class="mt-1 space-y-0.5">${tools}</div>` : ""}
+    </div>`;
+  }).join("");
   const strip = document.getElementById("mcp-strip");
-  if (mcp.connected) {
+  if (mcp.summary || mcp.server_count) {
     strip.classList.remove("hidden");
-    document.getElementById("mcp-strip-text").textContent = `${mcp.server_count} servers · ${mcp.tool_count} tools`;
+    document.getElementById("mcp-strip-text").textContent = mcp.summary || `${mcp.server_count} servers · ${mcp.tool_count} tools`;
   }
 }
 

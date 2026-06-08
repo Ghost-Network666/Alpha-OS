@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 import httpx
 
-from alpha_os.config import read_hermes_env, read_openclaw_config
+from alpha_os.config import read_hermes_env, read_openclaw_config, read_openclaw_env
 
 logger = logging.getLogger("alpha_os.detector")
 
@@ -105,7 +105,8 @@ def _hermes_api_key() -> str:
 def _openclaw_token() -> str:
     import os
 
-    token = os.getenv("OPENCLAW_GATEWAY_TOKEN", "")
+    env = read_openclaw_env()
+    token = os.getenv("OPENCLAW_GATEWAY_TOKEN", "") or env.get("OPENCLAW_GATEWAY_TOKEN", "")
     if token:
         return token
     cfg = read_openclaw_config()

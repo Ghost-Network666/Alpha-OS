@@ -41,7 +41,7 @@ fi
 source "${VENV}/bin/activate"
 pip install --upgrade pip wheel -q
 info "Installing Alpha OS (editable)…"
-pip install -e "${ROOT}[voice]" -q
+pip install -e "${ROOT}[voice,mcp]" -q
 ok "Backend installed"
 
 # ── Node.js 18+ (for Next.js frontend) ───────────────────────
@@ -80,11 +80,7 @@ if [[ -f "${ROOT}/frontend/package.json" ]]; then
   info "Installing frontend dependencies…"
   cd "${ROOT}/frontend"
   npm install --no-fund --no-audit
-  if [[ ! -f .env.local ]]; then
-    echo "NEXT_PUBLIC_API_URL=http://127.0.0.1:8080" > .env.local
-    ok "Created frontend/.env.local"
-  fi
-  ok "Frontend installed"
+  ok "Frontend installed (config from ~/.hermes/.env + ~/.openclaw/.env)"
   cd "${ROOT}"
 else
   fail "frontend/ not found — clone the full repo: git clone https://github.com/Ghost-Network666/Alpha-OS.git"
