@@ -143,11 +143,14 @@ def _apply_config_to_bridges() -> None:
 async def _init_bridges() -> None:
     global _active_runtime
     _apply_config_to_bridges()
+    HERMES_BRIDGE._resolve_api_key()
     info = await detect_best()
     if info.name == "hermes" and info.gateway_url:
         HERMES_BRIDGE.gateway_url = info.gateway_url
         if info.api_key:
             HERMES_BRIDGE.api_key = info.api_key
+        else:
+            HERMES_BRIDGE._resolve_api_key()
     if info.name == "openclaw":
         if info.ws_url:
             OPENCLAW_BRIDGE.ws_url = info.ws_url

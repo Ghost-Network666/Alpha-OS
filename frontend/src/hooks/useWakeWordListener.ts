@@ -23,6 +23,7 @@ interface UseWakeWordListenerOptions {
 }
 
 const DEFAULT_WAKE = "hey alpha";
+const WAKE_COOLDOWN_MS = 4000;
 
 export function useWakeWordListener({
   enabled,
@@ -36,6 +37,9 @@ export function useWakeWordListener({
   const [detail, setDetail] = useState<string | undefined>();
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const armedRef = useRef(false);
+  const wakeAnnouncedRef = useRef(false);
+  const lastWakeAtRef = useRef(0);
+  const lastCommandRef = useRef("");
   const onCommandRef = useRef(onCommand);
   const onWakeRef = useRef(onWake);
   const onStatusRef = useRef(onStatus);
@@ -50,6 +54,13 @@ export function useWakeWordListener({
     setStatus(next);
     setDetail(msg);
     onStatusRef.current?.(next, msg);
+  }, []);
+
+  const announceWake = useCallback(() => {
+    const now = Date.now();
+    if (now - lastWakeAtRef.current < WAKE_COOLDOWN_MS) return;
+    lastWakeAtRef.current = now;
+    onWakeRef.current?.();
   }, []);
 
   const stopRecognition = useCallback(() => {
@@ -74,6 +85,7 @@ export function useWakeWordListener({
     if (!enabled) {
       setWakeStatus("idle");
       armedRef.current = false;
+      wakeAnnouncedRef.current = false;
       stopRecognition();
       return;
     }
@@ -93,6 +105,19 @@ export function useWakeWordListener({
     let cancelled = false;
     setWakeStatus("loading");
 
+    const dispatchCommand = (command: string) => {
+      const cmd = command.trim();
+      if (!cmd || cmd === lastCommandRef.current) return;
+      lastCommandRef.current = cmd;
+      armedRef.current = false;
+      wakeAnnouncedRef.current = false;
+      setWakeStatus("capturing");
+      void Promise.resolve(onCommandRef.current(cmd)).finally(() => {
+        lastCommandRef.current = "";
+        setWakeStatus("listening");
+      });
+    };
+
     const start = () => {
       if (cancelled) return;
       const rec = new SR();
@@ -109,32 +134,27 @@ export function useWakeWordListener({
         const text = combined.trim();
         if (!text) return;
 
+        const isFinal = ev.results[ev.results.length - 1]?.isFinal;
+
         if (hasWakeWord(text, wakeWord)) {
           const command = stripWakeWord(text, wakeWord);
-          const isFinal = ev.results[ev.results.length - 1]?.isFinal;
-          onWakeRef.current?.();
           if (command && isFinal) {
-            armedRef.current = false;
-            setWakeStatus("capturing");
-            void Promise.resolve(onCommandRef.current(command)).finally(() =>
-              setWakeStatus("listening")
-            );
+            dispatchCommand(command);
           } else if (!command) {
-            armedRef.current = true;
-            setWakeStatus("capturing");
+            if (!armedRef.current) {
+              armedRef.current = true;
+              if (!wakeAnnouncedRef.current) {
+                wakeAnnouncedRef.current = true;
+                announceWake();
+              }
+              setWakeStatus("capturing");
+            }
           }
           return;
         }
 
-        if (armedRef.current) {
-          const isFinal = ev.results[ev.results.length - 1]?.isFinal;
-          if (isFinal && text) {
-            armedRef.current = false;
-            setWakeStatus("capturing");
-            void Promise.resolve(onCommandRef.current(text)).finally(() =>
-              setWakeStatus("listening")
-            );
-          }
+        if (armedRef.current && isFinal && text) {
+          dispatchCommand(text);
         }
       };
 
@@ -157,6 +177,7 @@ export function useWakeWordListener({
       rec.onend = () => {
         if (!cancelled) {
           armedRef.current = false;
+          wakeAnnouncedRef.current = false;
           window.setTimeout(start, 300);
         }
       };
@@ -177,9 +198,17 @@ export function useWakeWordListener({
     return () => {
       cancelled = true;
       armedRef.current = false;
+      wakeAnnouncedRef.current = false;
       stopRecognition();
     };
-  }, [enabled, wakeWord, tailscaleHttpsUrl, setWakeStatus, stopRecognition]);
+  }, [
+    enabled,
+    wakeWord,
+    tailscaleHttpsUrl,
+    setWakeStatus,
+    stopRecognition,
+    announceWake,
+  ]);
 
   return { status, detail };
 }

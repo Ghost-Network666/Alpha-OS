@@ -34,6 +34,22 @@ class HermesBridge:
         self._sessions: list[dict[str, Any]] = []
         self._capabilities: dict[str, Any] = {}
         self._last_event: dict[str, Any] = {}
+        self._auth_error: str | None = None
+
+    def _resolve_api_key(self) -> str:
+        """Load API key from active profile .env, ~/.hermes/.env, or Alpha OS config."""
+        from alpha_os.config import get, read_hermes_env
+
+        env = read_hermes_env()
+        key = (
+            env.get("API_SERVER_KEY")
+            or env.get("HERMES_API_KEY")
+            or str(get("hermes.api_key", "") or "")
+            or os.getenv("HERMES_API_KEY", "")
+            or os.getenv("API_SERVER_KEY", "")
+        ).strip()
+        self.api_key = key
+        return key
 
     def _headers(self) -> dict[str, str]:
         h: dict[str, str] = {"Accept": "application/json"}
@@ -41,9 +57,38 @@ class HermesBridge:
             h["Authorization"] = f"Bearer {self.api_key}"
         return h
 
+    async def _verify_authenticated(self, client: httpx.AsyncClient) -> bool:
+        """Health can be public; confirm an authed route before marking LIVE."""
+        self._auth_error = None
+        for path in ("/v1/capabilities", "/v1/toolsets", "/v1/models"):
+            try:
+                r = await client.get(
+                    f"{self.gateway_url}{path}",
+                    headers=self._headers(),
+                )
+                if r.status_code == 200:
+                    return True
+                if r.status_code == 401:
+                    self._auth_error = (
+                        "Hermes API key rejected (HTTP 401) — set API_SERVER_KEY in "
+                        "Settings → Gateway to match ~/.hermes/.env"
+                    )
+                    return False
+            except Exception:
+                continue
+        if not self.api_key:
+            self._auth_error = (
+                "Hermes API key missing — set API_SERVER_KEY in Settings → Gateway "
+                "or ~/.hermes/.env"
+            )
+            return False
+        return True
+
     async def connect(self) -> bool:
+        self._resolve_api_key()
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
+                reachable = False
                 for path in ("/health", "/v1/health", "/v1/models"):
                     try:
                         r = await client.get(
@@ -51,11 +96,20 @@ class HermesBridge:
                             headers=self._headers(),
                         )
                         if r.status_code == 200:
-                            self._connected = True
-                            await self._fetch_all(client)
-                            return True
+                            reachable = True
+                            break
                     except Exception:
                         continue
+                if not reachable:
+                    self._connected = False
+                    return False
+                if not await self._verify_authenticated(client):
+                    self._connected = False
+                    logger.warning("Hermes auth failed: %s", self._auth_error)
+                    return False
+                self._connected = True
+                await self._fetch_all(client)
+                return True
         except Exception as e:
             logger.warning("Hermes gateway offline: %s", e)
         self._connected = False
@@ -267,18 +321,50 @@ class HermesBridge:
             "last_event": self._last_event,
         }
 
+    async def _post_with_auth_retry(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        *,
+        json: dict[str, Any],
+    ) -> httpx.Response:
+        self._resolve_api_key()
+        r = await client.post(url, headers=self._headers(), json=json)
+        if r.status_code == 401:
+            self._resolve_api_key()
+            r = await client.post(url, headers=self._headers(), json=json)
+        return r
+
     async def send_command(self, text: str) -> dict[str, Any]:
         if not self._connected:
             return {"ok": False, "error": "Hermes gateway offline"}
+        self._resolve_api_key()
+        if not self.api_key:
+            return {
+                "ok": False,
+                "error": (
+                    "Hermes API key missing — open Settings → Gateway and set "
+                    "API_SERVER_KEY (same value as ~/.hermes/.env)"
+                ),
+            }
         try:
             import asyncio
 
             async with httpx.AsyncClient(timeout=120.0) as client:
-                r = await client.post(
+                r = await self._post_with_auth_retry(
+                    client,
                     f"{self.gateway_url}/v1/runs",
-                    headers=self._headers(),
                     json={"input": text, "session_id": "alpha-os"},
                 )
+                if r.status_code == 401:
+                    self._connected = False
+                    return {
+                        "ok": False,
+                        "error": (
+                            "HTTP 401 — Hermes rejected the API key. Settings → Gateway: "
+                            "paste API_SERVER_KEY from ~/.hermes/.env, save, then Reconnect."
+                        ),
+                    }
                 if r.status_code == 200:
                     data = r.json()
                     run_id = data.get("run_id")
@@ -306,15 +392,24 @@ class HermesBridge:
                             "run_id": run_id,
                         }
 
-                r2 = await client.post(
+                r2 = await self._post_with_auth_retry(
+                    client,
                     f"{self.gateway_url}/v1/chat/completions",
-                    headers=self._headers(),
                     json={
                         "model": "hermes-agent",
                         "messages": [{"role": "user", "content": text}],
                         "stream": False,
                     },
                 )
+                if r2.status_code == 401:
+                    self._connected = False
+                    return {
+                        "ok": False,
+                        "error": (
+                            "HTTP 401 — Hermes rejected the API key. Settings → Gateway: "
+                            "paste API_SERVER_KEY from ~/.hermes/.env, save, then Reconnect."
+                        ),
+                    }
                 if r2.status_code == 200:
                     body = r2.json()
                     content = (
