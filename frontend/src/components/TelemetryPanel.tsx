@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import type { LiveEvent } from "@/types/state";
 
 interface TelemetryPanelProps {
@@ -7,7 +8,10 @@ interface TelemetryPanelProps {
   logs: { ts: string; who: string; msg: string }[];
 }
 
-export function TelemetryPanel({ events, logs }: TelemetryPanelProps) {
+export const TelemetryPanel = memo(function TelemetryPanel({
+  events,
+  logs,
+}: TelemetryPanelProps) {
   return (
     <section className="flex min-h-0 flex-1 flex-col rounded-2xl border border-cyan-900/25 bg-[#0d0d14]/80 p-4">
       <span className="mb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">
@@ -31,4 +35,4 @@ export function TelemetryPanel({ events, logs }: TelemetryPanelProps) {
       </div>
     </section>
   );
-}
+});

@@ -41,9 +41,16 @@ const EMPTY_STATE: AlphaState = {
   tailscale: {
     available: false,
     backend_state: "unknown",
+    connected: false,
     self_ip: null,
     hostname: null,
+    dns_name: null,
+    exit_node: null,
+    uptime_sec: 0,
+    downtime_sec: 0,
     peers: [],
+    peer_count: 0,
+    peers_online: 0,
   },
 };
 
@@ -71,12 +78,25 @@ function stateFingerprint(data: AlphaState): string {
     data.mcp?.tool_count ?? 0,
     data.mcp?.widgets?.length ?? 0,
     data.mcp?.tools_online ?? 0,
+    data.voice_live?.tts_provider ?? "",
+    data.voice_live?.session?.tts_requests ?? 0,
+    data.voice_live?.session?.stt_requests ?? 0,
+    data.voice_live?.session?.estimated_tokens ?? 0,
+    ...(data.profile_agents ?? []).map(
+      (p) => `${p.name}:${p.status}:${p.activity ?? ""}:${p.busy ? 1 : 0}`
+    ),
+    data.tailscale?.connected ? 1 : 0,
+    data.tailscale?.backend_state ?? "",
+    data.tailscale?.exit_node?.hostname ?? "",
+    Math.floor(data.tailscale?.uptime_sec ?? 0),
+    Math.floor(data.tailscale?.downtime_sec ?? 0),
   ].join(":");
 }
 
 export function useAlphaState() {
   const [state, setState] = useState<AlphaState>(EMPTY_STATE);
   const [loading, setLoading] = useState(true);
+  const [reconnecting, setReconnecting] = useState(false);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [metricHistory, setMetricHistory] = useState<Record<string, number[]>>({});
@@ -119,7 +139,7 @@ export function useAlphaState() {
 
   const reconnect = useCallback(async () => {
     try {
-      setLoading(true);
+      setReconnecting(true);
       fingerprintRef.current = "";
       const reconnected = await reconnectRuntime();
       if (reconnected?.state) {
@@ -131,7 +151,7 @@ export function useAlphaState() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Reconnect failed");
     } finally {
-      setLoading(false);
+      setReconnecting(false);
     }
   }, [applyState]);
 
@@ -151,7 +171,7 @@ export function useAlphaState() {
         };
         ws.onmessage = (ev) => {
           try {
-            applyState(JSON.parse(ev.data));
+            applyState(JSON.parse(ev.data as string));
           } catch {
             /* ignore */
           }
@@ -183,5 +203,14 @@ export function useAlphaState() {
     };
   }, [applyState]);
 
-  return { state, loading, connected, error, reconnect, metricHistory, pulseKey };
+  return {
+    state,
+    loading,
+    reconnecting,
+    connected,
+    error,
+    reconnect,
+    metricHistory,
+    pulseKey,
+  };
 };

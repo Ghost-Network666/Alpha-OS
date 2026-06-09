@@ -31,9 +31,10 @@ def test_color_for_index_wraps_palette() -> None:
 
 @pytest.mark.asyncio
 async def test_detect_hermes_no_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    missing = tmp_path / "missing-hermes"
     monkeypatch.setattr(
-        "alpha_os.bridges.detector.HERMES_HOME",
-        tmp_path / "missing-hermes",
+        "alpha_os.bridges.detector.hermes_home",
+        lambda: missing,
     )
     info = await detect_hermes()
     assert info.name == "hermes"
@@ -48,7 +49,7 @@ async def test_detect_hermes_connected(
 ) -> None:
     hermes = tmp_path / ".hermes"
     hermes.mkdir()
-    monkeypatch.setattr("alpha_os.bridges.detector.HERMES_HOME", hermes)
+    monkeypatch.setattr("alpha_os.bridges.detector.hermes_home", lambda: hermes)
     monkeypatch.setattr(
         "alpha_os.bridges.detector.read_hermes_env",
         lambda: {"API_SERVER_KEY": "k"},
@@ -75,7 +76,7 @@ async def test_detect_openclaw_reads_token_from_env(
 ) -> None:
     openclaw = tmp_path / ".openclaw"
     openclaw.mkdir()
-    monkeypatch.setattr("alpha_os.bridges.detector.OPENCLAW_HOME", openclaw)
+    monkeypatch.setattr("alpha_os.bridges.detector.openclaw_home", lambda: openclaw)
     monkeypatch.setattr(
         "alpha_os.bridges.detector.read_openclaw_env",
         lambda: {"OPENCLAW_GATEWAY_TOKEN": "oc-secret"},

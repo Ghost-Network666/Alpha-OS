@@ -17,6 +17,8 @@ export interface ProfileAgent {
   status: "LIVE" | "ACTIVE" | "STANDBY" | string;
   active: boolean;
   color?: string;
+  activity?: string | null;
+  busy?: boolean;
 }
 
 export interface CapabilityCard {
@@ -122,12 +124,48 @@ export interface Integrations {
   error?: string | null;
 }
 
+export interface TailscaleExitNode {
+  id?: string;
+  hostname?: string;
+  dns_name?: string;
+  ip?: string | null;
+  online?: boolean;
+  active?: boolean;
+  is_exit_node?: boolean;
+}
+
+export interface TailscalePeer {
+  id?: string;
+  hostname?: string;
+  dns_name?: string;
+  ip?: string | null;
+  online?: boolean;
+  active?: boolean;
+  os?: string;
+  is_exit_node?: boolean;
+  exit_node_option?: boolean;
+}
+
 export interface TailscaleStatus {
   available: boolean;
   backend_state: string;
+  online?: boolean;
+  connected?: boolean;
   self_ip: string | null;
   hostname: string | null;
-  peers: { hostname?: string; ip?: string; online?: boolean }[];
+  dns_name?: string | null;
+  version?: string | null;
+  advertises_exit_node?: boolean;
+  is_exit_node?: boolean;
+  exit_node?: TailscaleExitNode | null;
+  exit_node_id?: string | null;
+  uptime_since?: number | null;
+  downtime_since?: number | null;
+  uptime_sec?: number;
+  downtime_sec?: number;
+  peers: TailscalePeer[];
+  peer_count?: number;
+  peers_online?: number;
   error?: string | null;
 }
 
@@ -138,6 +176,38 @@ export interface VoiceProvider {
   enabled: boolean;
   kind?: string;
   note?: string;
+}
+
+export interface VoiceUsageSession {
+  tts_requests: number;
+  tts_characters: number;
+  stt_requests: number;
+  stt_characters: number;
+  estimated_tokens: number;
+  tts_estimated_tokens: number;
+  stt_estimated_tokens: number;
+  last_tts_provider?: string;
+  last_stt_provider?: string;
+  last_tts_chars?: number;
+  last_stt_chars?: number;
+}
+
+export interface VoiceLive {
+  active: boolean;
+  auto_tts: boolean;
+  stt_enabled: boolean;
+  tts_provider: string;
+  tts_provider_label: string;
+  tts_voice: string;
+  tts_model?: string;
+  tts_local: boolean;
+  stt_provider: string;
+  stt_provider_label: string;
+  stt_model?: string;
+  stt_local: boolean;
+  wake_word: string;
+  hermes_profile?: string;
+  session?: VoiceUsageSession;
 }
 
 export interface VoiceConfig {
@@ -158,6 +228,7 @@ export interface VoiceConfig {
   stt_model: string;
   tts_provider: string;
   tts_voice: string;
+  tts_model?: string;
   hermes_config_path?: string;
   hermes_config_exists?: boolean;
   hermes_profile?: string;
@@ -189,6 +260,7 @@ export interface AlphaState {
   tailscale: TailscaleStatus;
   memory?: { recent?: { who: string; text: string }[] };
   voice_config?: VoiceConfig;
+  voice_live?: VoiceLive | null;
   log_path?: string;
   tailscale_https_url?: string | null;
 }

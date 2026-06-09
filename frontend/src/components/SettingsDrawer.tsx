@@ -1,13 +1,28 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { AgentsSettingsTab } from "@/components/AgentsSettingsTab";
+import { TerminalPanel } from "@/components/TerminalPanel";
+import { Toggle } from "@/components/Toggle";
 import {
   autodetectConfig,
+  fetchElevenLabsVoices,
+  fetchProfileVoice,
   fetchSettings,
+  fetchSystemInfo,
   postConfig,
   postVoiceConfig,
   reloadConfig,
+  systemReboot,
+  type ElevenLabsVoice,
 } from "@/lib/api";
+import {
+  EDGE_VOICES,
+  ELEVENLABS_MODELS,
+  MODEL_PROVIDERS,
+  STT_MODELS,
+  XAI_VOICES,
+} from "@/lib/voice-options";
 import type { VoiceConfig } from "@/types/state";
 
 interface SettingsDrawerProps {
@@ -19,13 +34,21 @@ interface SettingsDrawerProps {
   onSaved: () => void;
 }
 
-type SettingsTab = "profiles" | "voice" | "gateway" | "runtime";
+type SettingsTab =
+  | "profiles"
+  | "agents"
+  | "voice"
+  | "gateway"
+  | "runtime"
+  | "terminal";
 
 const TABS: { id: SettingsTab; label: string }[] = [
   { id: "profiles", label: "Profiles" },
+  { id: "agents", label: "Agents" },
   { id: "voice", label: "Voice" },
   { id: "gateway", label: "Gateway" },
   { id: "runtime", label: "Runtime" },
+  { id: "terminal", label: "Terminal" },
 ];
 
 const DEFAULT_VOICE: Partial<VoiceConfig> = {
@@ -44,6 +67,7 @@ const DEFAULT_VOICE: Partial<VoiceConfig> = {
   stt_model: "base",
   tts_provider: "edge",
   tts_voice: "en-US-AriaNeural",
+  tts_model: "eleven_multilingual_v2",
 };
 
 export function SettingsDrawer({
@@ -79,6 +103,19 @@ export function SettingsDrawer({
   const [sttModel, setSttModel] = useState("base");
   const [ttsProvider, setTtsProvider] = useState("edge");
   const [ttsVoice, setTtsVoice] = useState("en-US-AriaNeural");
+  const [ttsModel, setTtsModel] = useState("eleven_multilingual_v2");
+  const [elevenlabsVoices, setElevenlabsVoices] = useState<ElevenLabsVoice[]>(
+    []
+  );
+  const [elevenlabsVoicesLoading, setElevenlabsVoicesLoading] = useState(false);
+  const [elevenlabsVoicesError, setElevenlabsVoicesError] = useState<
+    string | null
+  >(null);
+  const [elevenlabsKey, setElevenlabsKey] = useState("");
+  const [elevenlabsKeySet, setElevenlabsKeySet] = useState(false);
+  const [elevenlabsKeyMasked, setElevenlabsKeyMasked] = useState<string | null>(
+    null
+  );
   const [modelProvider, setModelProvider] = useState("");
   const [modelDefault, setModelDefault] = useState("");
   const [saving, setSaving] = useState(false);
@@ -87,6 +124,10 @@ export function SettingsDrawer({
   const [saveNote, setSaveNote] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [tab, setTab] = useState<SettingsTab>("profiles");
+  const [elevenSearch, setElevenSearch] = useState("");
+  const [ubuntuReboot, setUbuntuReboot] = useState(false);
+  const [rebooting, setRebooting] = useState(false);
+  const [profileLoading, setProfileLoading] = useState(false);
 
   const applyVoice = useCallback((v: Partial<VoiceConfig>) => {
     const merged = { ...DEFAULT_VOICE, ...v };
@@ -105,6 +146,7 @@ export function SettingsDrawer({
     setSttModel(merged.stt_model ?? "base");
     setTtsProvider(merged.tts_provider ?? "edge");
     setTtsVoice(merged.tts_voice ?? "en-US-AriaNeural");
+    setTtsModel(merged.tts_model ?? "eleven_multilingual_v2");
     setModelProvider(merged.model_provider ?? "");
     setModelDefault(merged.model_default ?? "");
     if (merged.hermes_profile) setHermesProfile(merged.hermes_profile);
@@ -122,6 +164,8 @@ export function SettingsDrawer({
       if (cfg.hermes?.config_path) setConfigPath(cfg.hermes.config_path);
       setHermesKeySet(Boolean(cfg.hermes?.api_key_set));
       setHermesKeyMasked(cfg.hermes?.api_key_masked ?? null);
+      setElevenlabsKeySet(Boolean(cfg.elevenlabs?.api_key_set));
+      setElevenlabsKeyMasked(cfg.elevenlabs?.api_key_masked ?? null);
       if (cfg.openclaw?.ws_url) setOcUrl(cfg.openclaw.ws_url);
       applyVoice(cfg.voice_live ?? voiceConfig ?? {});
     } catch (e) {
@@ -136,6 +180,79 @@ export function SettingsDrawer({
     setSaveError(null);
     void loadSettings();
   }, [open, loadSettings]);
+
+  useEffect(() => {
+    if (!open) return;
+    void fetchSystemInfo()
+      .then((info) => setUbuntuReboot(Boolean(info.reboot_available)))
+      .catch(() => setUbuntuReboot(false));
+  }, [open]);
+
+  const loadProfileVoice = useCallback(
+    async (profile: string) => {
+      setProfileLoading(true);
+      setSaveError(null);
+      try {
+        const res = await fetchProfileVoice(profile);
+        if (res.voice) applyVoice(res.voice);
+        if (res.voice?.hermes_config_path) setConfigPath(res.voice.hermes_config_path);
+      } catch (e) {
+        setSaveError(
+          e instanceof Error ? e.message : `Failed to load profile “${profile}”`
+        );
+      } finally {
+        setProfileLoading(false);
+      }
+    },
+    [applyVoice]
+  );
+
+  useEffect(() => {
+    if (!open || ttsProvider !== "elevenlabs") return;
+    let cancelled = false;
+    setElevenlabsVoicesLoading(true);
+    setElevenlabsVoicesError(null);
+    void fetchElevenLabsVoices(elevenSearch || undefined)
+      .then((res) => {
+        if (cancelled) return;
+        if (!res.available) {
+          setElevenlabsVoices([]);
+          setElevenlabsVoicesError(
+            res.error ?? "Set ELEVENLABS_API_KEY in Gateway tab"
+          );
+          return;
+        }
+        setElevenlabsVoices(res.voices ?? []);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setElevenlabsVoices([]);
+        setElevenlabsVoicesError(
+          e instanceof Error ? e.message : "Failed to load voices"
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setElevenlabsVoicesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, ttsProvider, elevenlabsKeySet, elevenSearch]);
+
+  const elevenOptions = (() => {
+    const opts = [...elevenlabsVoices];
+    if (
+      ttsVoice &&
+      !opts.some((v) => v.voice_id === ttsVoice)
+    ) {
+      opts.unshift({
+        voice_id: ttsVoice,
+        name: ttsVoice,
+        label: `${ttsVoice} (saved)`,
+      });
+    }
+    return opts;
+  })();
 
   const autodetect = async () => {
     setDetecting(true);
@@ -197,10 +314,11 @@ export function SettingsDrawer({
         runtime: rt,
         hermes_gateway_url: hermesUrl.trim() || undefined,
         hermes_api_key: hermesKey.trim() || undefined,
+        elevenlabs_api_key: elevenlabsKey.trim() || undefined,
         openclaw_ws_url: ocUrl.trim() || undefined,
         openclaw_token: ocToken.trim() || undefined,
       });
-      const res = await postVoiceConfig({
+      const voiceRes = await postVoiceConfig({
         hermes_profile: hermesProfile,
         wake_word: wakeWord.trim() || "hey alpha",
         browser_wake: browserWake,
@@ -219,13 +337,29 @@ export function SettingsDrawer({
         stt_model: sttModel,
         tts_provider: ttsProvider,
         tts_voice: ttsVoice,
+        tts_model: ttsProvider === "elevenlabs" ? ttsModel : undefined,
       });
-      const path = res?.voice?.hermes_config_path ?? configPath;
+      const path = voiceRes?.voice?.hermes_config_path ?? configPath;
       setConfigPath(path ?? null);
-      setSaveNote(path ? `Saved to ${path}` : "Saved to active Hermes profile");
+      const reload = voiceRes?.hermes_reload;
+      const reloadNote =
+        reload?.ok === true
+          ? " · Hermes gateway reloaded"
+          : reload?.hint
+            ? ` · ${reload.hint}`
+            : "";
+      setSaveNote(
+        path
+          ? `Saved to ${path}${reloadNote}`
+          : `Saved to profile “${hermesProfile}”${reloadNote}`
+      );
       if (hermesKey.trim()) {
         setHermesKeySet(true);
         setHermesKey("");
+      }
+      if (elevenlabsKey.trim()) {
+        setElevenlabsKeySet(true);
+        setElevenlabsKey("");
       }
       onSaved();
     } catch (e) {
@@ -245,7 +379,7 @@ export function SettingsDrawer({
         onClick={onClose}
       />
       <aside
-        className={`fixed inset-y-0 right-0 z-50 w-96 max-w-[92vw] overflow-y-auto border-l border-cyan-900/30 bg-[#0d0d14] p-5 transition-transform duration-300 ${
+        className={`fixed inset-y-0 right-0 z-50 w-[520px] max-w-[96vw] overflow-y-auto border-l border-cyan-900/30 bg-[#0d0d14] p-5 transition-transform duration-300 ${
           open ? "translate-x-0" : "translate-x-full"
         }`}
       >
@@ -327,8 +461,13 @@ export function SettingsDrawer({
             </p>
             <select
               value={hermesProfile}
-              onChange={(e) => setHermesProfile(e.target.value)}
-              className="mb-2 w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-2 py-1.5 text-xs"
+              onChange={(e) => {
+                const name = e.target.value;
+                setHermesProfile(name);
+                void loadProfileVoice(name);
+              }}
+              disabled={profileLoading}
+              className="mb-2 w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-2 py-1.5 text-xs disabled:opacity-60"
             >
               {(hermesProfiles.length ? hermesProfiles : [hermesProfile]).map(
                 (p) => (
@@ -338,7 +477,27 @@ export function SettingsDrawer({
                 )
               )}
             </select>
+            {profileLoading && (
+              <p className="text-[10px] text-slate-600">Loading profile settings…</p>
+            )}
+            <p className="mt-2 text-[10px] text-slate-600">
+              Switching profiles loads that profile&apos;s saved config. Click{" "}
+              <strong className="font-normal text-cyan-600">Save</strong> to persist
+              changes and set it as active.
+            </p>
           </div>
+          )}
+
+          {tab === "agents" && (
+            <AgentsSettingsTab
+              activeProfile={hermesProfile}
+              onProfileChange={(name) => {
+                setHermesProfile(name);
+                void loadProfileVoice(name);
+              }}
+              onError={setSaveError}
+              onNote={setSaveNote}
+            />
           )}
 
           {tab === "voice" && (
@@ -356,51 +515,52 @@ export function SettingsDrawer({
               className="mb-2 w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-2 py-1 font-mono text-xs"
             />
 
-            <label className="mb-2 flex items-center gap-2 text-xs text-slate-400">
-              <input
-                type="checkbox"
+            <div className="mb-3 space-y-1.5">
+              <Toggle
                 checked={browserWake}
-                onChange={(e) => setBrowserWake(e.target.checked)}
-                className="accent-cyan-500"
+                onChange={setBrowserWake}
+                label="Browser wake"
+                hint="Always-on phrase detection on HTTPS / localhost"
               />
-              Browser always-on wake (HTTPS / localhost)
-            </label>
-
-            <label className="mb-2 flex items-center gap-2 text-xs text-slate-400">
-              <input
-                type="checkbox"
+              <Toggle
                 checked={serverWake}
-                onChange={(e) => setServerWake(e.target.checked)}
-                className="accent-cyan-500"
+                onChange={setServerWake}
+                label="Server mic wake"
+                hint="Server listens for wake phrase (requires voice extras)"
               />
-              Server mic wake
-            </label>
-
-            <label className="mb-3 flex items-center gap-2 text-xs text-slate-400">
-              <input
-                type="checkbox"
+              <Toggle
                 checked={grokOauth}
-                onChange={(e) => setGrokOauth(e.target.checked)}
-                className="accent-cyan-500"
+                onChange={setGrokOauth}
+                label="Grok via X OAuth"
+                hint="SuperGrok / X OAuth — not xAI API keys"
               />
-              Grok via X OAuth / SuperGrok
-            </label>
+            </div>
 
           <div className="mt-4">
             <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">
-              Model
+              Model (saved to Hermes profile)
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="mb-1 block text-[10px] text-slate-500">
                   Provider
                 </label>
-                <input
+                <select
                   value={modelProvider}
                   onChange={(e) => setModelProvider(e.target.value)}
-                  placeholder="xai-oauth"
-                  className="w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-2 py-1 font-mono text-xs"
-                />
+                  className="w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-2 py-1 text-xs"
+                >
+                  <option value="">—</option>
+                  {MODEL_PROVIDERS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label}
+                    </option>
+                  ))}
+                  {modelProvider &&
+                    !MODEL_PROVIDERS.some((p) => p.id === modelProvider) && (
+                      <option value={modelProvider}>{modelProvider}</option>
+                    )}
+                </select>
               </div>
               <div>
                 <label className="mb-1 block text-[10px] text-slate-500">
@@ -483,34 +643,18 @@ export function SettingsDrawer({
               </div>
             </div>
 
-            <div className="mt-2 flex flex-wrap gap-3">
-              <label className="flex items-center gap-2 text-[10px] text-slate-400">
-                <input
-                  type="checkbox"
-                  checked={autoTts}
-                  onChange={(e) => setAutoTts(e.target.checked)}
-                  className="accent-cyan-500"
-                />
-                Auto TTS
-              </label>
-              <label className="flex items-center gap-2 text-[10px] text-slate-400">
-                <input
-                  type="checkbox"
-                  checked={beepEnabled}
-                  onChange={(e) => setBeepEnabled(e.target.checked)}
-                  className="accent-cyan-500"
-                />
-                Record beeps
-              </label>
-              <label className="flex items-center gap-2 text-[10px] text-slate-400">
-                <input
-                  type="checkbox"
-                  checked={sttEnabled}
-                  onChange={(e) => setSttEnabled(e.target.checked)}
-                  className="accent-cyan-500"
-                />
-                STT enabled
-              </label>
+            <div className="mt-2 space-y-1.5">
+              <Toggle checked={autoTts} onChange={setAutoTts} label="Auto TTS" />
+              <Toggle
+                checked={beepEnabled}
+                onChange={setBeepEnabled}
+                label="Record beeps"
+              />
+              <Toggle
+                checked={sttEnabled}
+                onChange={setSttEnabled}
+                label="STT enabled"
+              />
             </div>
 
             <div className="mt-3 grid grid-cols-2 gap-2">
@@ -535,11 +679,28 @@ export function SettingsDrawer({
                 <label className="mb-1 block text-[10px] text-slate-500">
                   STT model
                 </label>
-                <input
-                  value={sttModel}
-                  onChange={(e) => setSttModel(e.target.value)}
-                  className="w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-2 py-1 font-mono text-xs"
-                />
+                {STT_MODELS[sttProvider]?.length ? (
+                  <select
+                    value={sttModel}
+                    onChange={(e) => setSttModel(e.target.value)}
+                    className="w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-2 py-1 font-mono text-xs"
+                  >
+                    {STT_MODELS[sttProvider].map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                    {!STT_MODELS[sttProvider].includes(sttModel) && sttModel && (
+                      <option value={sttModel}>{sttModel}</option>
+                    )}
+                  </select>
+                ) : (
+                  <input
+                    value={sttModel}
+                    onChange={(e) => setSttModel(e.target.value)}
+                    className="w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-2 py-1 font-mono text-xs"
+                  />
+                )}
               </div>
             </div>
 
@@ -559,20 +720,113 @@ export function SettingsDrawer({
                   <option value="openai">openai</option>
                   <option value="xai">xai / grok voices</option>
                   <option value="mistral">mistral</option>
-                  <option value="piper">piper</option>
+                  <option value="piper">piper (local)</option>
+                  <option value="kittentts">kittentts (local)</option>
                 </select>
               </div>
               <div>
                 <label className="mb-1 block text-[10px] text-slate-500">
                   TTS voice
                 </label>
-                <input
-                  value={ttsVoice}
-                  onChange={(e) => setTtsVoice(e.target.value)}
-                  className="w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-2 py-1 font-mono text-xs"
-                />
+                {ttsProvider === "xai" ? (
+                  <select
+                    value={ttsVoice}
+                    onChange={(e) => setTtsVoice(e.target.value)}
+                    className="w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-2 py-1 text-xs"
+                  >
+                    {XAI_VOICES.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.label}
+                      </option>
+                    ))}
+                    {!XAI_VOICES.some((v) => v.id === ttsVoice) && ttsVoice && (
+                      <option value={ttsVoice}>{ttsVoice}</option>
+                    )}
+                  </select>
+                ) : ttsProvider === "edge" ? (
+                  <select
+                    value={ttsVoice}
+                    onChange={(e) => setTtsVoice(e.target.value)}
+                    className="w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-2 py-1 text-xs"
+                  >
+                    {EDGE_VOICES.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.label}
+                      </option>
+                    ))}
+                    {!EDGE_VOICES.some((v) => v.id === ttsVoice) && ttsVoice && (
+                      <option value={ttsVoice}>{ttsVoice}</option>
+                    )}
+                  </select>
+                ) : ttsProvider === "elevenlabs" ? (
+                  <>
+                    <input
+                      value={elevenSearch}
+                      onChange={(e) => setElevenSearch(e.target.value)}
+                      placeholder="Search voice library…"
+                      className="mb-1 w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-2 py-1 text-xs"
+                    />
+                    <select
+                      value={ttsVoice}
+                      onChange={(e) => setTtsVoice(e.target.value)}
+                      className="w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-2 py-1 text-xs"
+                    >
+                      {elevenOptions.map((v) => (
+                        <option key={v.voice_id} value={v.voice_id}>
+                          {v.label}
+                        </option>
+                      ))}
+                    </select>
+                    <a
+                      href="https://elevenlabs.io/voice-library"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1 inline-block text-[10px] text-cyan-600 hover:underline"
+                    >
+                      Browse ElevenLabs voice library →
+                    </a>
+                  </>
+                ) : (
+                  <input
+                    value={ttsVoice}
+                    onChange={(e) => setTtsVoice(e.target.value)}
+                    className="w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-2 py-1 font-mono text-xs"
+                  />
+                )}
+                {ttsProvider === "elevenlabs" && elevenlabsVoicesLoading && (
+                  <p className="mt-1 text-[10px] text-slate-600">
+                    Loading voice library…
+                  </p>
+                )}
+                {ttsProvider === "elevenlabs" && elevenlabsVoicesError && (
+                  <p className="mt-1 text-[10px] text-amber-600">
+                    {elevenlabsVoicesError}
+                  </p>
+                )}
               </div>
             </div>
+
+            {ttsProvider === "elevenlabs" && (
+              <div className="mt-2">
+                <label className="mb-1 block text-[10px] text-slate-500">
+                  ElevenLabs model
+                </label>
+                <select
+                  value={ttsModel}
+                  onChange={(e) => setTtsModel(e.target.value)}
+                  className="w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-2 py-1 text-xs"
+                >
+                  {ELEVENLABS_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                  {!ELEVENLABS_MODELS.some((m) => m.id === ttsModel) && ttsModel && (
+                    <option value={ttsModel}>{ttsModel}</option>
+                  )}
+                </select>
+              </div>
+            )}
 
             {voiceConfig?.providers && voiceConfig.providers.length > 0 && (
               <div className="mt-3 space-y-1">
@@ -625,6 +879,33 @@ export function SettingsDrawer({
             />
 
             <label className="mb-1 block text-[10px] uppercase text-slate-500">
+              ElevenLabs API key
+            </label>
+            <input
+              type="password"
+              value={elevenlabsKey}
+              onChange={(e) => setElevenlabsKey(e.target.value)}
+              placeholder={
+                elevenlabsKeySet
+                  ? `configured (${elevenlabsKeyMasked ?? "••••"}) — enter to replace`
+                  : "writes ELEVENLABS_API_KEY to ~/.hermes/.env"
+              }
+              className="mb-2 w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-3 py-2 font-mono text-xs"
+            />
+            <p className="mb-2 text-[10px] leading-relaxed text-slate-600">
+              Powers ElevenLabs TTS and the voice library picker. Get a key at{" "}
+              <a
+                href="https://elevenlabs.io/"
+                target="_blank"
+                rel="noreferrer"
+                className="text-cyan-600 hover:underline"
+              >
+                elevenlabs.io
+              </a>
+              .
+            </p>
+
+            <label className="mb-1 block text-[10px] uppercase text-slate-500">
               OpenClaw WS URL
             </label>
             <input
@@ -667,7 +948,53 @@ export function SettingsDrawer({
               Alpha OS reads live data from your Hermes or OpenClaw gateway.
               Use Gateway tab for API URLs and keys.
             </p>
+            {ubuntuReboot && (
+              <div className="mt-4 rounded-lg border border-rose-900/40 bg-rose-950/20 p-3">
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-rose-400">
+                  Ubuntu server reboot
+                </div>
+                <p className="mb-2 text-[10px] text-slate-500">
+                  Runs <code className="text-rose-300">sudo reboot</code> on this
+                  VPS. Requires passwordless sudo.
+                </p>
+                <button
+                  type="button"
+                  disabled={rebooting}
+                  onClick={async () => {
+                    if (
+                      !window.confirm(
+                        "Reboot this Ubuntu server now? All services will restart."
+                      )
+                    ) {
+                      return;
+                    }
+                    setRebooting(true);
+                    setSaveError(null);
+                    try {
+                      await systemReboot();
+                      setSaveNote("Reboot initiated — reconnect shortly");
+                    } catch (e) {
+                      setSaveError(
+                        e instanceof Error ? e.message : "Reboot failed"
+                      );
+                    } finally {
+                      setRebooting(false);
+                    }
+                  }}
+                  className="w-full rounded-lg border border-rose-800 bg-rose-950/40 py-2 text-xs font-semibold text-rose-300 hover:bg-rose-900/30 disabled:opacity-50"
+                >
+                  {rebooting ? "Rebooting…" : "Reboot server (Ubuntu)"}
+                </button>
+              </div>
+            )}
           </div>
+          )}
+
+          {tab === "terminal" && (
+            <TerminalPanel
+              profiles={hermesProfiles.length ? hermesProfiles : [hermesProfile]}
+              defaultProfile={hermesProfile}
+            />
           )}
 
           {saveNote && (

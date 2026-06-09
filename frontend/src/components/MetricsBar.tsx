@@ -91,8 +91,8 @@ export const MetricsBar = memo(function MetricsBar({
     : [];
 
   return (
-    <div className="shrink-0 border-b border-slate-800/60 bg-[#0a0a0f]/80 px-4 py-2">
-      <div className="flex gap-2 overflow-x-auto pb-1">
+    <div className="shrink-0 border-b border-slate-800/60 bg-[#0a0a0f]/80 px-2 py-1.5 sm:px-3">
+      <div className="flex flex-wrap gap-1.5 sm:gap-2">
         {cards.map((c) => (
           <MetricCard
             key={c.key}

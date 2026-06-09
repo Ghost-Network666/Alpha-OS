@@ -10,8 +10,22 @@ import httpx
 
 from alpha_os.config import read_hermes_config, read_hermes_env
 from alpha_os.voice.hermes_sync import load_voice_config
+from alpha_os.voice.usage import voice_usage_session
 
 logger = logging.getLogger("alpha_os.voice")
+
+
+def _record_tts_usage(provider: str, text: str) -> None:
+    voice_usage_session().record_tts(
+        provider=provider,
+        characters=len((text or "").strip()),
+    )
+
+
+def _with_usage(result: Optional[TtsResult], text: str) -> Optional[TtsResult]:
+    if result:
+        _record_tts_usage(result.provider, text)
+    return result
 
 MAX_TTS_CHARS = 5000
 
@@ -67,6 +81,9 @@ def _resolve_voice(provider: str, voice: Optional[str]) -> str:
     xai = tts.get("xai") if isinstance(tts.get("xai"), dict) else {}
     if xai.get("voice_id"):
         return str(xai["voice_id"])
+    eleven = tts.get("elevenlabs") if isinstance(tts.get("elevenlabs"), dict) else {}
+    if provider == "elevenlabs" and eleven.get("voice_id"):
+        return str(eleven["voice_id"])
     return "en-US-AriaNeural"
 
 
@@ -190,6 +207,26 @@ async def synthesize_tts(
     prov = (provider or cfg.get("tts_provider") or "edge").strip().lower()
     resolved_voice = _resolve_voice(prov, voice)
 
+    if prov == "elevenlabs":
+        from alpha_os.voice.elevenlabs import synthesize_elevenlabs
+
+        el = await synthesize_elevenlabs(trimmed, voice_id=resolved_voice)
+        if el:
+            audio, ctype = el
+            return _with_usage(
+                TtsResult(audio=audio, content_type=ctype, provider="elevenlabs"),
+                trimmed,
+            )
+        if hermes_connected and hermes_gateway_url:
+            gw = await _synthesize_hermes_gateway(
+                trimmed,
+                gateway_url=hermes_gateway_url,
+                provider="elevenlabs",
+                voice=resolved_voice,
+            )
+            if gw:
+                return _with_usage(gw, trimmed)
+
     if prov in {"grok", "xai"}:
         if hermes_gateway_url:
             gw = await _synthesize_hermes_gateway(
@@ -199,25 +236,28 @@ async def synthesize_tts(
                 voice=resolved_voice,
             )
             if gw:
-                return gw
+                return _with_usage(gw, trimmed)
         direct = await _synthesize_xai_direct(trimmed, resolved_voice)
         if direct:
-            return direct
+            return _with_usage(direct, trimmed)
         prov = "edge"
 
+    local_prov = prov if prov in {"neutts", "piper", "kittentts"} else "edge"
     if prov == "edge" or prov in {"neutts", "piper", "kittentts"}:
         edge = await _synthesize_edge(trimmed, resolved_voice)
         if edge:
-            return edge
+            edge.provider = local_prov if prov != "edge" else "edge"
+            return _with_usage(edge, trimmed)
         if hermes_connected and hermes_gateway_url:
             gw = await _synthesize_hermes_gateway(
                 trimmed,
                 gateway_url=hermes_gateway_url,
-                provider="edge",
+                provider=local_prov,
                 voice=resolved_voice,
             )
             if gw:
-                return gw
+                gw.provider = local_prov
+                return _with_usage(gw, trimmed)
 
     if hermes_connected and hermes_gateway_url:
         gw = await _synthesize_hermes_gateway(
@@ -227,6 +267,7 @@ async def synthesize_tts(
             voice=resolved_voice,
         )
         if gw:
-            return gw
+            return _with_usage(gw, trimmed)
 
-    return await _synthesize_edge(trimmed, resolved_voice)
+    fallback = await _synthesize_edge(trimmed, resolved_voice)
+    return _with_usage(fallback, trimmed)

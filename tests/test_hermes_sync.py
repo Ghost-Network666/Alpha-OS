@@ -9,17 +9,21 @@ def test_voice_defaults_include_auto_tts():
 def test_apply_voice_config_writes_alpha_wake(tmp_path, monkeypatch):
     hermes_home = tmp_path / ".hermes"
     hermes_home.mkdir()
-    config_path = hermes_home / "config.yaml"
+    profile_dir = hermes_home / "profiles" / "default"
+    profile_dir.mkdir(parents=True)
+    config_path = profile_dir / "config.yaml"
     config_path.write_text("alpha_os:\n  wake_word: old\n", encoding="utf-8")
 
     alpha_home = tmp_path / ".alpha-os"
     alpha_home.mkdir()
 
+    monkeypatch.setattr("alpha_os.config.hermes_home", lambda: hermes_home)
     monkeypatch.setattr("alpha_os.config.HERMES_HOME", hermes_home)
-    monkeypatch.setattr("alpha_os.config.HERMES_CONFIG_PATH", config_path)
+    monkeypatch.setattr("alpha_os.config.HERMES_CONFIG_PATH", hermes_home / "config.yaml")
     monkeypatch.setattr("alpha_os.config.HERMES_ENV_PATH", hermes_home / ".env")
     monkeypatch.setattr("alpha_os.config.CONFIG_DIR", alpha_home)
     monkeypatch.setattr("alpha_os.config.CONFIG_PATH", alpha_home / "config.yaml")
+    monkeypatch.setattr("alpha_os.config.active_hermes_profile", lambda: "default")
     monkeypatch.setattr(
         "alpha_os.voice.openclaw_voicewake.openclaw_installed",
         lambda: False,

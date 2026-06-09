@@ -139,8 +139,33 @@ export interface VoiceConfigPayload {
   stt_model?: string;
   tts_provider?: string;
   tts_voice?: string;
+  tts_model?: string;
   provider_id?: string;
   provider_enabled?: boolean;
+}
+
+export interface ElevenLabsVoice {
+  voice_id: string;
+  name: string;
+  label: string;
+  category?: string;
+}
+
+export async function fetchElevenLabsVoices(search?: string) {
+  const params = new URLSearchParams();
+  if (search?.trim()) params.set("search", search.trim());
+  params.set("page_size", "100");
+  const qs = params.toString();
+  const res = await fetch(
+    `${getHttpApiBase()}/api/voice/elevenlabs/voices${qs ? `?${qs}` : ""}`,
+    { cache: "no-store" }
+  );
+  if (!res.ok) throw new Error(`ElevenLabs voices failed: ${res.status}`);
+  return res.json() as Promise<{
+    available: boolean;
+    voices: ElevenLabsVoice[];
+    error?: string;
+  }>;
 }
 
 export async function postVoiceConfig(body: VoiceConfigPayload) {
@@ -149,8 +174,132 @@ export async function postVoiceConfig(body: VoiceConfigPayload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`Voice save failed: ${res.status}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      typeof data.error === "string" ? data.error : `Voice save failed: ${res.status}`
+    );
+  }
+  return data;
+}
+
+export interface HermesProfileSummary {
+  name: string;
+  active: boolean;
+  config_path: string;
+  model: { provider: string; default: string; base_url?: string };
+  toolsets: { id: string; enabled: boolean }[];
+  mcp_servers: { id: string; enabled: boolean; command?: string }[];
+  skills: { id: string; name: string; rel_path: string; path?: string }[];
+  disabled_toolsets?: string[];
+}
+
+export async function fetchHermesProfiles() {
+  const res = await fetch(`${getHttpApiBase()}/api/hermes/profiles`, {
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`Profiles fetch failed: ${res.status}`);
+  return res.json() as Promise<{ ok: boolean; profiles: HermesProfileSummary[] }>;
+}
+
+export async function fetchProfileVoice(profile: string) {
+  const res = await fetch(
+    `${getHttpApiBase()}/api/hermes/profiles/${encodeURIComponent(profile)}/voice`,
+    { cache: "no-store" }
+  );
+  if (!res.ok) throw new Error(`Profile voice load failed: ${res.status}`);
   return res.json();
+}
+
+export async function switchHermesProfile(profile: string) {
+  const res = await fetch(`${getHttpApiBase()}/api/hermes/profiles/switch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ profile }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      typeof data.error === "string" ? data.error : `Profile switch failed: ${res.status}`
+    );
+  }
+  return data;
+}
+
+export async function saveProfileAgent(
+  profile: string,
+  body: {
+    model_provider?: string;
+    model_default?: string;
+    disabled_toolsets?: string[];
+    mcp_enabled?: Record<string, boolean>;
+  }
+) {
+  const res = await fetch(
+    `${getHttpApiBase()}/api/hermes/profiles/${encodeURIComponent(profile)}/agent`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      typeof data.error === "string" ? data.error : `Agent save failed: ${res.status}`
+    );
+  }
+  return data as { ok: boolean; profile: HermesProfileSummary };
+}
+
+export async function fetchSkillMarkdown(profile: string, skillPath: string) {
+  const res = await fetch(
+    `${getHttpApiBase()}/api/hermes/profiles/${encodeURIComponent(profile)}/skills/${skillPath}`,
+    { cache: "no-store" }
+  );
+  if (!res.ok) throw new Error(`Skill load failed: ${res.status}`);
+  return res.json() as Promise<{ ok: boolean; content?: string; path?: string }>;
+}
+
+export async function fetchSystemInfo() {
+  const res = await fetch(`${getHttpApiBase()}/api/system/info`, {
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`System info failed: ${res.status}`);
+  return res.json() as Promise<{
+    ok: boolean;
+    ubuntu: boolean;
+    reboot_available: boolean;
+    system: string;
+    release: string;
+  }>;
+}
+
+export async function systemReboot() {
+  const res = await fetch(`${getHttpApiBase()}/api/system/reboot`, {
+    method: "POST",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      typeof data.error === "string" ? data.error : `Reboot failed: ${res.status}`
+    );
+  }
+  return data;
+}
+
+export async function reportVoiceUsage(body: {
+  kind: "tts" | "stt";
+  provider?: string;
+  characters: number;
+}) {
+  const res = await fetch(`${getHttpApiBase()}/api/voice/usage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return null;
+  return res.json() as Promise<{ ok: boolean; live?: import("@/types/state").VoiceLive }>;
 }
 
 export async function fetchTtsAudio(

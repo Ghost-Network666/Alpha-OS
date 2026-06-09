@@ -2,61 +2,98 @@
 
 Voice-first cyber command-center — the default web UI for [Hermes Agent](https://hermes-agent.nousresearch.com/) and [OpenClaw](https://openclaw.ai/).
 
-**Public repo:** https://github.com/Ghost-Network666/Alpha-OS
-
-## What it does
-
-- Connects to your Hermes gateway — **blank until `~/.hermes` is installed and live**
-- Discovers agents, toolsets, skills, and sessions dynamically at runtime
-- No hardcoded agents, no demo data, no stale mock panels
-- Modular bridges — Hermes REST, OpenClaw WebSocket, stdio MCP (from runtime configs), Tailscale
+**Repository:** https://github.com/Ghost-Network666/Alpha-OS
 
 ---
 
-## Install from repo (recommended)
+## Install (full UI — recommended)
 
-Anyone can clone and run with two commands:
+### Requirements
+
+| What | Version |
+|------|---------|
+| Linux or macOS | — |
+| Python | 3.10+ |
+| Node.js | 20+ (installed automatically by `./install.sh` via nvm if missing) |
+| Git | any recent version |
+| Hermes Agent or OpenClaw | optional at install; required for live gateway data |
+
+### Step 1 — Clone and install
 
 ```bash
 git clone https://github.com/Ghost-Network666/Alpha-OS.git
 cd Alpha-OS
+chmod +x install.sh scripts/*.sh
 ./install.sh
 ```
 
-This installs:
-- Python 3.10+ virtualenv (`.venv`)
-- Alpha OS backend (`pip install -e .`)
-- Next.js 15 frontend (`frontend/`, npm install)
-- Node.js via nvm if not already present
+`./install.sh` creates a Python venv (`.venv`), installs the backend (`pip install -e .`), and installs the Next.js frontend (`frontend/`).
 
-Then start (production — recommended):
+### Step 2 — Start Alpha OS
+
+**Production (recommended — survives logout/reboot with systemd):**
 
 ```bash
 ./scripts/install-systemd.sh
-systemctl --user start alpha-os-backend alpha-os-frontend alpha-os-tailscale
+systemctl --user enable alpha-os-backend alpha-os-frontend
+systemctl --user start alpha-os-backend alpha-os-frontend
 ```
 
-Open **http://127.0.0.1:4000** (frontend) — API runs on **http://127.0.0.1:8081** (or the next free port if 8080 is taken).
-
-Dev mode:
+**Dev mode (hot reload):**
 
 ```bash
 ./scripts/start.sh
 ```
 
-**Remote access (any device on your Tailscale tailnet):**
+### Step 3 — Open the UI
+
+| Service | URL |
+|---------|-----|
+| **Web UI** | http://127.0.0.1:4000 |
+| **API** | http://127.0.0.1:8081 (or next free port if 8080 is busy) |
+| **Health** | http://127.0.0.1:8081/health |
+
+The dashboard is intentionally empty until a runtime is installed and the gateway is online.
+
+### Step 4 — Remote access over Tailscale (optional)
+
+On a machine with [Tailscale](https://tailscale.com/) installed and connected:
 
 ```bash
+./scripts/install-systemd.sh   # includes alpha-os-tailscale.service when tailscale CLI exists
+systemctl --user start alpha-os-tailscale
+# or once:
 ./scripts/tailscale-serve.sh
-# → https://<your-machine>.ts.net/
 ```
 
-Or use the CLI:
+Then open **`https://<your-machine>.ts.net/`** from any device on your tailnet (HTTPS enables browser microphone for voice).
+
+### Step 5 — Connect Hermes or OpenClaw (for live panels)
+
+See [Connect Hermes](#connect-hermes-required-for-live-data) or configure OpenClaw in `~/.openclaw/.env`, then click **Reconnect** in the Alpha OS top bar.
+
+---
+
+## Quick install (backend only)
+
+If you only need the API / legacy static UI (no Next.js frontend):
 
 ```bash
-source .venv/bin/activate
-alpha-os start
+curl -fsSL https://raw.githubusercontent.com/Ghost-Network666/Alpha-OS/main/install.sh | bash
+alpha-os serve
 ```
+
+For the **full Web UI**, clone the repo and run `./install.sh` (steps above).
+
+---
+
+## What it does
+
+- Connects to your Hermes or OpenClaw gateway — panels stay minimal until the runtime is live
+- Discovers agents, toolsets, skills, and sessions dynamically at runtime
+- Live Tailscale status bar (hostname, exit node, uptime/downtime)
+- Voice (wake word, TTS/STT, ElevenLabs), settings, Hermes profiles, MCP tools — all from the Web UI
+- Modular bridges — Hermes REST, OpenClaw WebSocket, stdio MCP (from runtime configs), Tailscale
 
 ---
 
@@ -89,20 +126,7 @@ hermes plugins enable alpha-os
 hermes dashboard
 ```
 
----
-
-## Quick install (backend only)
-
-For backend without cloning the full repo:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Ghost-Network666/Alpha-OS/main/install.sh | bash
-alpha-os serve    # legacy UI at http://127.0.0.1:8080
-```
-
-For the **full Next.js UI**, clone the repo and run `./install.sh`.
-
-Or via pip:
+Or via pip (backend package only):
 
 ```bash
 pip install alpha-os
@@ -132,7 +156,7 @@ alpha-os serve
 | Component | Version |
 |-----------|---------|
 | Python | 3.10+ |
-| Node.js | 18+ (installed automatically by `./install.sh` via nvm) |
+| Node.js | 20+ (installed automatically by `./install.sh` via nvm) |
 | Hermes Agent | For live gateway data |
 
 ---
@@ -227,7 +251,7 @@ pip install -e ".[mcp]"
 ## Architecture
 
 ```
-frontend/             # Next.js 15 App Router (primary UI)
+frontend/             # Next.js App Router (primary UI)
 src/alpha_os/
 ├── bridges/          # Hermes REST + OpenClaw WebSocket
 ├── core/             # Alpha butler + SQLite memory
@@ -266,7 +290,7 @@ cd Alpha-OS
 ### Tests
 
 ```bash
-# Backend (60+ unit tests)
+# Backend
 pip install -e ".[test,mcp]"
 pytest
 

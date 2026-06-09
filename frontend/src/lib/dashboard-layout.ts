@@ -42,11 +42,31 @@ export const DEFAULT_LAYOUT: DashboardLayout = {
   mcpCategories: ["all"],
 };
 
+/** First visit on phones/tablets — command + metrics only; rest via View menu. */
+export const COMPACT_LAYOUT: DashboardLayout = {
+  widgets: {
+    metrics: true,
+    capabilities: false,
+    command: true,
+    telemetry: false,
+    tailscale: false,
+    integrations: true,
+    mcp_tools: false,
+    mcp_data: false,
+  },
+  mcpCategories: ["all"],
+};
+
+function isNarrowViewport(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.matchMedia("(max-width: 767px)").matches;
+}
+
 export function loadDashboardLayout(): DashboardLayout {
   if (typeof window === "undefined") return DEFAULT_LAYOUT;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_LAYOUT;
+    if (!raw) return isNarrowViewport() ? COMPACT_LAYOUT : DEFAULT_LAYOUT;
     const parsed = JSON.parse(raw) as Partial<DashboardLayout>;
     return {
       widgets: { ...DEFAULT_LAYOUT.widgets, ...parsed.widgets },

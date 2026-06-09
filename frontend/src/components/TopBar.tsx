@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 
 interface TopBarProps {
   connected: boolean;
@@ -8,17 +8,19 @@ interface TopBarProps {
   hermesConnected: boolean;
   gatewayOnline?: boolean;
   openclawConnected?: boolean;
+  reconnecting?: boolean;
   onReconnect: () => void;
   onSettings: () => void;
   onCustomizeView?: () => void;
 }
 
-export function TopBar({
+export const TopBar = memo(function TopBar({
   connected,
   runtime,
   hermesConnected,
   gatewayOnline,
   openclawConnected,
+  reconnecting = false,
   onReconnect,
   onSettings,
   onCustomizeView,
@@ -27,11 +29,14 @@ export function TopBar({
 
   useEffect(() => {
     setNow(new Date());
-    const id = setInterval(() => setNow(new Date()), 1000);
+    const tick = () => setNow(new Date());
+    const id = setInterval(tick, 30_000);
     return () => clearInterval(id);
   }, []);
 
   const online = gatewayOnline ?? hermesConnected ?? Boolean(openclawConnected);
+  const fullyConnected = connected && online;
+
   const statusLabel = connected
     ? online
       ? "● Gateway LIVE"
@@ -44,37 +49,76 @@ export function TopBar({
       : "border-amber-600/40 bg-amber-950/30 text-amber-400"
     : "border-[#ff3366]/40 bg-[#ff3366]/10 text-[#ff3366]";
 
+  const reconnectLabel = reconnecting
+    ? "Connecting…"
+    : fullyConnected
+      ? "Connected"
+      : connected
+        ? "Refresh"
+        : "Reconnect";
+
+  const reconnectClass = reconnecting
+    ? "border-slate-700 bg-slate-900/60 text-slate-400"
+    : fullyConnected
+      ? "border-[#00ff88]/45 bg-[#00ff88]/10 text-[#00ff88]"
+      : connected
+        ? "border-cyan-800/50 bg-cyan-950/40 text-cyan-400"
+        : "border-amber-700/50 bg-amber-950/30 text-amber-300";
+
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-cyan-900/30 bg-[#0a0a0f]/90 px-4 backdrop-blur-md">
-      <div className="flex items-center gap-4">
-        <div className="flex items-center gap-2">
-          <span className="text-lg font-bold tracking-[0.2em] text-[#00f5ff]">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-cyan-900/30 bg-[#0a0a0f]/95 px-3 pt-[env(safe-area-inset-top)] sm:gap-4 sm:px-4">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+        <div className="flex shrink-0 items-center gap-0.5 rounded-lg border border-cyan-500/35 bg-gradient-to-br from-cyan-950/70 via-[#0c1218] to-[#0a0a0f] px-2.5 py-1.5 sm:gap-1 sm:px-3 sm:py-2">
+          <span className="text-base font-black tracking-[0.22em] text-[#00f5ff] sm:text-xl sm:tracking-[0.28em]">
             ALPHA
           </span>
-          <span className="text-lg font-light tracking-[0.35em] text-slate-500">
+          <span className="text-base font-semibold tracking-[0.32em] text-slate-200 sm:text-xl sm:tracking-[0.4em]">
             OS
           </span>
         </div>
+
         <span
-          className={`rounded-full border px-3 py-1 text-xs font-semibold ${statusClass}`}
+          className={`hidden rounded-full border px-3 py-1 text-xs font-semibold min-[400px]:inline ${statusClass}`}
         >
           {statusLabel}
         </span>
+        <span
+          className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold min-[400px]:hidden ${statusClass}`}
+          aria-label={statusLabel}
+        >
+          {connected ? (online ? "●" : "○") : "○"}
+        </span>
+
         {runtime !== "offline" && (
-          <span className="hidden text-[10px] uppercase tracking-wider text-slate-600 sm:inline">
+          <span className="hidden text-[10px] uppercase tracking-wider text-slate-600 md:inline">
             {runtime}
           </span>
         )}
+
         <button
           type="button"
           onClick={onReconnect}
-          className="rounded-lg border border-cyan-800/50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-cyan-400 transition hover:border-cyan-600 hover:bg-cyan-950/50"
+          disabled={reconnecting}
+          aria-label={reconnectLabel}
+          className={`shrink-0 rounded-lg border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition hover:opacity-90 disabled:cursor-wait disabled:opacity-70 sm:px-3 sm:text-[11px] ${reconnectClass}`}
         >
-          Reconnect
+          {reconnecting ? (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-current opacity-70" />
+              <span className="hidden sm:inline">{reconnectLabel}</span>
+            </span>
+          ) : (
+            <>
+              <span className="hidden sm:inline">{reconnectLabel}</span>
+              <span className="sm:hidden" aria-hidden>
+                {fullyConnected ? "✓" : "↻"}
+              </span>
+            </>
+          )}
         </button>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-2 sm:gap-4">
         {now && (
           <div className="hidden text-right font-mono text-xs text-slate-400 sm:block">
             <div>{now.toLocaleTimeString()}</div>
@@ -124,4 +168,4 @@ export function TopBar({
       </div>
     </header>
   );
-}
+});

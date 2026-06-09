@@ -40,6 +40,16 @@ function Panel({
   );
 }
 
+function formatSec(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${r}s`;
+  return `${r}s`;
+}
+
 export const SidePanels = memo(function SidePanels({
   tailscale,
   integrations,
@@ -56,6 +66,9 @@ export const SidePanels = memo(function SidePanels({
     (w) => !mcpCategoryFilter || mcpCategoryFilter(w.category)
   );
 
+  const tsConnected = Boolean(tailscale.connected);
+  const exit = tailscale.exit_node;
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain">
       {showTailscale && (
@@ -63,18 +76,42 @@ export const SidePanels = memo(function SidePanels({
           title="Tailscale"
           badge={
             <span
-              className={`rounded-full border px-2 py-px text-[9px] ${
-                tailscale.available
+              className={`rounded-full border px-2 py-px text-[9px] font-semibold uppercase ${
+                tsConnected
                   ? "border-emerald-800 text-emerald-500"
-                  : "border-slate-700 text-slate-500"
+                  : tailscale.available
+                    ? "border-amber-800 text-amber-500"
+                    : "border-slate-700 text-slate-500"
               }`}
             >
-              {tailscale.available ? tailscale.backend_state : "unavailable"}
+              {tsConnected ? "Running" : tailscale.available ? tailscale.backend_state : "N/A"}
             </span>
           }
         >
-          <div className="font-mono text-xs text-slate-300">
-            {tailscale.hostname ?? tailscale.self_ip ?? "—"}
+          <div className="space-y-1.5 font-mono text-xs text-slate-300">
+            <div className="font-semibold text-cyan-300">
+              {tailscale.hostname ?? tailscale.dns_name ?? "—"}
+            </div>
+            {tailscale.self_ip && (
+              <div className="text-[10px] text-slate-500">{tailscale.self_ip}</div>
+            )}
+            <div className="text-[10px] text-slate-500">
+              Exit:{" "}
+              <span className="text-violet-300">
+                {exit?.hostname ?? exit?.dns_name ?? "None (direct)"}
+              </span>
+            </div>
+            <div className="text-[10px] text-slate-600">
+              {tsConnected
+                ? `Uptime ${formatSec(tailscale.uptime_sec ?? 0)}`
+                : `Downtime ${formatSec(tailscale.downtime_sec ?? 0)}`}
+              {tailscale.peers_online != null && (
+                <span>
+                  {" "}
+                  · {tailscale.peers_online}/{tailscale.peer_count ?? 0} peers online
+                </span>
+              )}
+            </div>
           </div>
         </Panel>
       )}

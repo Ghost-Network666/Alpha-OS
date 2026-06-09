@@ -110,9 +110,7 @@ def set_key(key: str, value: Any) -> None:
 
 
 def active_hermes_profile() -> str:
-    override = hermes_profile_name()
-    if override:
-        return override
+    """UI-selected profile (~/.hermes/active_profile), then env pin, else default."""
     path = hermes_home() / "active_profile"
     if path.exists():
         try:
@@ -121,6 +119,9 @@ def active_hermes_profile() -> str:
                 return name
         except Exception:
             pass
+    override = hermes_profile_name()
+    if override:
+        return override
     return "default"
 
 
@@ -146,16 +147,10 @@ def set_active_hermes_profile(name: str) -> None:
 
 
 def hermes_config_path(profile: str | None = None) -> Path:
-    """Active Hermes profile config when present, else ~/.hermes/config.yaml."""
-    profile_dir = hermes_profile_dir()
-    if profile_dir is not None:
-        return profile_dir / "config.yaml"
-
-    name = profile or active_hermes_profile()
-    if name and name != "default":
-        profile_cfg = hermes_home() / "profiles" / name / "config.yaml"
-        if profile_cfg.exists():
-            return profile_cfg
+    """Path to ~/.hermes/profiles/<name>/config.yaml for the given or active profile."""
+    name = (profile or active_hermes_profile()).strip() or "default"
+    profile_cfg = hermes_home() / "profiles" / name / "config.yaml"
+    if profile_cfg.exists() or name != "default":
         return profile_cfg
     return hermes_config_path_global()
 
@@ -314,6 +309,7 @@ def _resolve_primary_runtime(runtime: str | None = None) -> str:
 
 def inject_runtime_env(runtime: str | None = None) -> dict[str, str]:
     """Inject env from ~/.hermes/.env and ~/.openclaw/.env."""
+    pre_existing = frozenset(os.environ)
     primary = _resolve_primary_runtime(runtime)
     hermes = read_hermes_env()
     openclaw = read_openclaw_env()
@@ -331,6 +327,9 @@ def inject_runtime_env(runtime: str | None = None) -> dict[str, str]:
         if not value:
             continue
         if key in force_keys:
+            # Explicit process env (tests, systemd) wins over runtime .env files.
+            if key in _ALPHA_OS_ENV_KEYS and key in pre_existing:
+                continue
             os.environ[key] = value
 
     return {**hermes, **openclaw}

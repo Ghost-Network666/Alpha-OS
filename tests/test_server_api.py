@@ -47,7 +47,8 @@ def test_api_state_offline_has_mcp_panel(client: TestClient) -> None:
     data = res.json()
     assert "mcp" in data
     assert "servers" in data["mcp"]
-    assert data.get("live") is False
+    assert data.get("gateway_online") is False
+    assert data.get("runtime") == "offline"
 
 
 def test_api_command_empty_reply(client: TestClient) -> None:
@@ -92,3 +93,33 @@ def test_api_config_roundtrip(client: TestClient, tmp_path, monkeypatch) -> None
     assert get_res.status_code == 200
     cfg = get_res.json()
     assert cfg.get("runtime") == "openclaw"
+
+
+def test_voice_elevenlabs_voices_without_key(client: TestClient) -> None:
+    res = client.get("/api/voice/elevenlabs/voices")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["available"] is False
+    assert data["voices"] == []
+
+
+def test_voice_tts_empty_text(client: TestClient) -> None:
+    res = client.post("/api/voice/tts", json={"text": "   "})
+    assert res.status_code == 502
+
+
+def test_voice_tts_edge_mock(client: TestClient, monkeypatch) -> None:
+    from alpha_os.voice.tts_stream import TtsResult
+
+    async def fake_synthesize(*args, **kwargs):
+        return TtsResult(audio=b"abc", content_type="audio/mpeg", provider="edge")
+
+    monkeypatch.setattr("alpha_os.voice.tts_stream.synthesize_tts", fake_synthesize)
+
+    res = client.post(
+        "/api/voice/tts",
+        json={"text": "hello", "provider": "edge", "voice": "en-US-AriaNeural"},
+    )
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("audio/")
+    assert res.content == b"abc"

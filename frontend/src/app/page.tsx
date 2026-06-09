@@ -1,32 +1,37 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { CapabilitiesPanel } from "@/components/CapabilitiesPanel";
+import { reportVoiceUsage } from "@/lib/api";
 import { CommandPanel } from "@/components/CommandPanel";
-import { ConnectScreen } from "@/components/ConnectScreen";
-import { LoadingScreen } from "@/components/LoadingScreen";
+import { DashboardSkeleton } from "@/components/DashboardSkeleton";
 import { GridBackground } from "@/components/GridBackground";
-import { MetricsBar } from "@/components/MetricsBar";
-import { ProfileAgentsRow } from "@/components/ProfileAgentsRow";
-import { SettingsDrawer } from "@/components/SettingsDrawer";
-import { SidePanels } from "@/components/SidePanels";
-import { ViewCustomizer } from "@/components/ViewCustomizer";
-import { ClientLogger } from "@/components/ClientLogger";
 import { MicSecureBanner } from "@/components/MicSecureBanner";
 import { SecureTailscaleRedirect } from "@/components/SecureTailscaleRedirect";
-import { micBlockedReason } from "@/lib/secure-context";
-import { TelemetryPanel } from "@/components/TelemetryPanel";
+import { ClientLogger } from "@/components/ClientLogger";
+import { TailscaleLiveBar } from "@/components/TailscaleLiveBar";
 import { TopBar } from "@/components/TopBar";
 import { useAlphaState } from "@/hooks/useAlphaState";
 import { useDashboardLayout } from "@/hooks/useDashboardLayout";
 import { useWakeWordListener } from "@/hooks/useWakeWordListener";
 import { clientLog } from "@/lib/client-log";
+import { micBlockedReason } from "@/lib/secure-context";
+import {
+  LazyCapabilitiesPanel,
+  LazyConnectScreen,
+  LazyMetricsBar,
+  LazyProfileAgentsRow,
+  LazySettingsDrawer,
+  LazySidePanels,
+  LazyTelemetryPanel,
+  LazyViewCustomizer,
+} from "@/lib/lazy-panels";
 import { sendCommand } from "@/lib/api";
 import { speakAlphaReply } from "@/lib/speech";
 import type { CapabilityCard } from "@/types/state";
 
 export default function DashboardPage() {
-  const { state, loading, reconnect, metricHistory, pulseKey } = useAlphaState();
+  const { state, loading, reconnecting, reconnect, metricHistory, pulseKey } =
+    useAlphaState();
   const {
     layout,
     toggleWidget,
@@ -39,6 +44,11 @@ export default function DashboardPage() {
   const [logs, setLogs] = useState<{ ts: string; who: string; msg: string }[]>(
     []
   );
+  const [speaking, setSpeaking] = useState(false);
+  const [lastVoiceActivity, setLastVoiceActivity] = useState<{
+    kind: "tts" | "stt";
+    chars: number;
+  } | null>(null);
 
   const live = Boolean(state.live);
   const gatewayOnline = Boolean(
@@ -59,13 +69,21 @@ export default function DashboardPage() {
   const browserWake = state.voice_config?.browser_wake ?? true;
   const autoTts = state.voice_config?.auto_tts ?? true;
   const ttsVoice = state.voice_config?.tts_voice ?? "en-US-AriaNeural";
+  const ttsProvider = state.voice_config?.tts_provider;
 
   const speakReply = useCallback(
     (reply: string) => {
       if (!autoTts) return;
-      speakAlphaReply(reply, ttsVoice);
+      const trimmed = reply.trim();
+      if (!trimmed) return;
+      setLastVoiceActivity({ kind: "tts", chars: trimmed.length });
+      void speakAlphaReply(trimmed, {
+        voiceHint: ttsVoice,
+        provider: ttsProvider,
+        onSpeakingChange: setSpeaking,
+      });
     },
-    [autoTts, ttsVoice]
+    [autoTts, ttsVoice, ttsProvider]
   );
 
   const onLog = useCallback(
@@ -84,6 +102,12 @@ export default function DashboardPage() {
       const cmd = command.trim();
       if (!cmd || !live || !gatewayOnline) return;
       onLog(cmd, "you");
+      setLastVoiceActivity({ kind: "stt", chars: cmd.length });
+      void reportVoiceUsage({
+        kind: "stt",
+        provider: state.voice_live?.stt_provider ?? state.voice_config?.stt_provider,
+        characters: cmd.length,
+      });
       try {
         const res = await sendCommand(cmd);
         const reply = res.reply ?? "No response";
@@ -93,11 +117,18 @@ export default function DashboardPage() {
         onLog(e instanceof Error ? e.message : "Voice command failed", "system");
       }
     },
-    [live, gatewayOnline, onLog, speakReply]
+    [
+      live,
+      gatewayOnline,
+      onLog,
+      speakReply,
+      state.voice_live?.stt_provider,
+      state.voice_config?.stt_provider,
+    ]
   );
 
   const { status: wakeStatus, detail: wakeDetail } = useWakeWordListener({
-    enabled: live && gatewayOnline && browserWake,
+    enabled: live && gatewayOnline && browserWake && isWidgetOn("command"),
     wakeWord,
     tailscaleHttpsUrl: state.tailscale_https_url,
     onWake: () => onLog("Wake phrase detected — listening for command", "voice"),
@@ -135,40 +166,47 @@ export default function DashboardPage() {
         hermesConnected={state.hermes_connected}
         gatewayOnline={gatewayOnline}
         openclawConnected={state.openclaw_connected}
+        reconnecting={reconnecting}
         onReconnect={reconnect}
         onSettings={() => setSettingsOpen(true)}
         onCustomizeView={() => setViewOpen(true)}
       />
 
-      <ViewCustomizer
-        open={viewOpen}
-        onClose={() => setViewOpen(false)}
-        widgets={layout.widgets}
-        mcpCategories={layout.mcpCategories}
-        mcp={state.mcp}
-        onToggleWidget={toggleWidget}
-        onToggleMcpCategory={toggleMcpCategory}
-      />
+      <TailscaleLiveBar tailscale={state.tailscale} />
+
+      {viewOpen && (
+        <LazyViewCustomizer
+          open={viewOpen}
+          onClose={() => setViewOpen(false)}
+          widgets={layout.widgets}
+          mcpCategories={layout.mcpCategories}
+          mcp={state.mcp}
+          onToggleWidget={toggleWidget}
+          onToggleMcpCategory={toggleMcpCategory}
+        />
+      )}
 
       {live && isWidgetOn("metrics") && (
         <>
-          <MetricsBar
+          <LazyMetricsBar
             metrics={state.metrics}
             polymarket={state.polymarket}
             history={metricHistory}
             gatewayOnline={gatewayOnline}
             pulseKey={pulseKey}
           />
-          <ProfileAgentsRow profiles={state.profile_agents ?? []} />
+          <LazyProfileAgentsRow profiles={state.profile_agents ?? []} />
         </>
       )}
 
       {loading ? (
-        <LoadingScreen />
+        <DashboardSkeleton />
       ) : !live ? (
-        <ConnectScreen
+        <LazyConnectScreen
           hermesInstalled={Boolean(state.hermes_installed)}
-          openclawInstalled={Boolean(state.openclaw?.gateway_url) || state.openclaw_connected}
+          openclawInstalled={
+            Boolean(state.openclaw?.gateway_url) || state.openclaw_connected
+          }
           hermesConnected={state.hermes_connected}
           openclawConnected={state.openclaw_connected}
           runtimePreference={state.runtime}
@@ -176,19 +214,10 @@ export default function DashboardPage() {
           onReconnect={reconnect}
         />
       ) : (
-        <main className="grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 lg:grid-cols-12">
-          {isWidgetOn("capabilities") && (
-            <div className="flex min-h-0 flex-col lg:col-span-3">
-              <CapabilitiesPanel
-                capabilities={capabilities}
-                gatewayOnline={gatewayOnline}
-              />
-            </div>
-          )}
-
+        <main className="dashboard-main grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:grid-cols-12">
           <div
-            className={`flex min-h-0 flex-col gap-3 ${
-              isWidgetOn("capabilities") ? "lg:col-span-6" : "lg:col-span-9"
+            className={`order-1 flex min-h-0 flex-col gap-3 ${
+              isWidgetOn("capabilities") ? "lg:order-2 lg:col-span-6" : "lg:col-span-9"
             }`}
           >
             {isWidgetOn("command") && (
@@ -200,22 +229,36 @@ export default function DashboardPage() {
                   wakeStatus={wakeStatus}
                   wakeDetail={wakeDetail}
                   wakeWord={wakeWord}
+                  voiceLive={state.voice_live}
+                  speaking={speaking}
+                  lastVoiceActivity={lastVoiceActivity}
                   onLog={onLog}
                   onReply={speakReply}
                 />
               </div>
             )}
             {isWidgetOn("telemetry") && (
-              <TelemetryPanel events={state.live_events} logs={logs} />
+              <div className="widget-panel min-h-[12rem] flex-1 lg:min-h-0">
+                <LazyTelemetryPanel events={state.live_events} logs={logs} />
+              </div>
             )}
           </div>
+
+          {isWidgetOn("capabilities") && (
+            <div className="widget-panel order-2 flex min-h-0 flex-col lg:order-1 lg:col-span-3">
+              <LazyCapabilitiesPanel
+                capabilities={capabilities}
+                gatewayOnline={gatewayOnline}
+              />
+            </div>
+          )}
 
           {(isWidgetOn("tailscale") ||
             isWidgetOn("integrations") ||
             isWidgetOn("mcp_tools") ||
             isWidgetOn("mcp_data")) && (
-            <div className="min-h-0 lg:col-span-3">
-              <SidePanels
+            <div className="widget-panel order-3 min-h-0 max-h-[50vh] lg:max-h-none lg:col-span-3">
+              <LazySidePanels
                 tailscale={state.tailscale}
                 integrations={state.integrations}
                 mcp={state.mcp}
@@ -232,14 +275,16 @@ export default function DashboardPage() {
         </main>
       )}
 
-      <SettingsDrawer
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        runtime={state.runtime}
-        live={live}
-        voiceConfig={state.voice_config}
-        onSaved={reconnect}
-      />
+      {settingsOpen && (
+        <LazySettingsDrawer
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          runtime={state.runtime}
+          live={live}
+          voiceConfig={state.voice_config}
+          onSaved={reconnect}
+        />
+      )}
     </div>
   );
 }

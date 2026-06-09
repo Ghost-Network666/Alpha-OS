@@ -1,18 +1,23 @@
 "use client";
 
+import { memo } from "react";
+
 interface ActivityOrbProps {
   pulse: boolean;
   active: boolean;
 }
 
-export function ActivityOrb({ pulse, active }: ActivityOrbProps) {
+export const ActivityOrb = memo(function ActivityOrb({
+  pulse,
+  active,
+}: ActivityOrbProps) {
   return (
     <div
-      className={`relative h-20 w-20 shrink-0 ${pulse ? "animate-orb-pulse" : ""}`}
+      className={`relative h-16 w-16 shrink-0 sm:h-20 sm:w-20 ${pulse ? "animate-orb-pulse" : ""}`}
       title={active ? "Live agent activity" : "Awaiting activity"}
     >
       <div
-        className="absolute inset-0 rounded-full opacity-60 blur-md"
+        className="absolute inset-0 rounded-full opacity-45 sm:opacity-55"
         style={{
           background: active
             ? "radial-gradient(circle, #ff2d78 0%, #ff006e 55%, transparent 70%)"
@@ -20,16 +25,15 @@ export function ActivityOrb({ pulse, active }: ActivityOrbProps) {
         }}
       />
       <div
-        className="absolute inset-2 rounded-full border border-[#ff2d78]/40"
+        className="absolute inset-1.5 rounded-full border border-[#ff2d78]/40 sm:inset-2"
         style={{
           background:
             "radial-gradient(circle at 35% 35%, #ff5a9a, #ff006e 60%, #8a0038 100%)",
           boxShadow: active
-            ? "0 0 24px rgba(255,45,120,0.7), inset 0 0 12px rgba(255,0,110,0.4)"
-            : "0 0 8px rgba(255,45,120,0.2)",
+            ? "0 0 10px rgba(255,45,120,0.4)"
+            : "0 0 4px rgba(255,45,120,0.12)",
         }}
       />
-      <div className="absolute inset-5 rounded-full bg-white/10 blur-[2px]" />
     </div>
   );
-}
+});

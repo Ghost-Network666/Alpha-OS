@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import time
 
-from alpha_os.core.events import LiveEventBuffer, _summarize_event
+from alpha_os.core.events import (
+    LiveEventBuffer,
+    ProfileActivityTracker,
+    _summarize_event,
+    human_activity_text,
+)
 
 
 def test_summarize_openclaw_event_with_payload() -> None:
@@ -55,3 +60,31 @@ def test_consume_pulse_and_events_per_minute() -> None:
     buf._events[0]["ts"] = old  # type: ignore[index]
     buf.push("hermes", {"type": "fresh"})
     assert buf.events_per_minute() == 1
+
+
+def test_human_activity_command() -> None:
+    text = human_activity_text("command", {"text": "check polymarket positions"})
+    assert "Running:" in text
+    assert "polymarket" in text
+
+
+def test_human_activity_hermes_tool() -> None:
+    text = human_activity_text(
+        "hermes",
+        {"type": "tool_call", "tool": "web_search", "status": "running"},
+    )
+    assert "web_search" in text
+
+
+def test_profile_activity_tracker() -> None:
+    tracker = ProfileActivityTracker(ttl_sec=60)
+    tracker.record_event(
+        "command",
+        {"text": "summarize inbox"},
+        fallback_profile="alpha",
+    )
+    entry = tracker.get("alpha")
+    assert entry is not None
+    assert "summarize" in entry["text"]
+    assert entry["busy"] is True
+    assert tracker.get("rewards") is None

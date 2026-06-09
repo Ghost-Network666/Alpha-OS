@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -24,7 +24,11 @@ from alpha_os.bridges.detector import color_for_index, detect_best
 from alpha_os.config import get, load_config, set_hermes_env, set_key
 from alpha_os.voice.hermes_sync import apply_voice_config, load_voice_config
 from alpha_os.core.alpha import Alpha
-from alpha_os.core.events import LiveEventBuffer
+from alpha_os.core.events import (
+    LiveEventBuffer,
+    ProfileActivityTracker,
+    human_activity_text,
+)
 from alpha_os.integrations.mcp_bridge import MCPRegistry
 from alpha_os.integrations.tailscale import TailscaleStatus
 
@@ -90,10 +94,14 @@ def _empty_panel_state() -> dict[str, Any]:
         "tailscale": {
             "available": False,
             "backend_state": "offline",
+            "connected": False,
             "self_ip": None,
             "hostname": None,
+            "dns_name": None,
             "exit_node": None,
             "peers": [],
+            "uptime_sec": 0.0,
+            "downtime_sec": 0.0,
         },
         "polymarket": {
             "connected": False,
@@ -107,6 +115,7 @@ OPENCLAW_BRIDGE = OpenClawBridge()
 TAILSCALE = TailscaleStatus()
 MCP_REGISTRY = MCPRegistry()
 LIVE_EVENTS = LiveEventBuffer()
+PROFILE_ACTIVITY = ProfileActivityTracker()
 _last_hermes_retry = 0.0
 _last_oc_retry = 0.0
 _active_runtime = "offline"
@@ -240,6 +249,31 @@ def _build_profile_agents(
         else:
             status = "STANDBY"
         title_parts = [p for p in (model_default, model_provider) if p]
+        activity_entry = PROFILE_ACTIVITY.get(name)
+        if (
+            not activity_entry
+            and is_active
+            and gateway_online
+            and active_runtime == "hermes"
+        ):
+            last = HERMES_BRIDGE._last_event
+            if last:
+                activity_entry = {
+                    "text": human_activity_text("hermes", last),
+                    "ts": time.time(),
+                    "busy": str(
+                        last.get("status") or last.get("state") or ""
+                    ).lower()
+                    in ("running", "in_progress", "active", "started"),
+                }
+        activity = None
+        busy = False
+        if activity_entry:
+            activity = str(activity_entry.get("text") or "").strip() or None
+            busy = bool(activity_entry.get("busy"))
+            if busy and is_active and gateway_online:
+                status = "LIVE"
+
         cards.append(
             {
                 "id": f"profile-{name}",
@@ -251,6 +285,8 @@ def _build_profile_agents(
                 "status": status,
                 "active": is_active,
                 "color": color_for_index(i),
+                "activity": activity,
+                "busy": busy,
             }
         )
     return cards
@@ -315,7 +351,6 @@ async def _build_state() -> dict[str, Any]:
                 ),
             }
         data["integrations"] = integrations
-        data["tailscale"] = TAILSCALE.to_dict()
         toolsets = integrations.get("toolsets", [])
         skills = integrations.get("skills", [])
         sessions = integrations.get("sessions", [])
@@ -365,14 +400,31 @@ async def _build_state() -> dict[str, Any]:
         "browser_mic": bool(voice_cfg.get("browser_wake", True)),
         "providers": voice_providers,
     }
+    try:
+        from alpha_os.voice.live import build_voice_live
+
+        data["voice_live"] = build_voice_live()
+    except Exception:
+        data["voice_live"] = None
     ts_dns = _tailscale_dns_name()
     data["log_path"] = str(log_path())
     data["tailscale_https_url"] = f"https://{ts_dns}" if ts_dns else None
+    data["tailscale"] = TAILSCALE.to_dict()
     return data
 
 
 def _on_gateway_event(source: str, event: dict[str, Any]) -> None:
     LIVE_EVENTS.push(source, event)
+    try:
+        from alpha_os.config import active_hermes_profile
+
+        PROFILE_ACTIVITY.record_event(
+            source,
+            event,
+            fallback_profile=active_hermes_profile(),
+        )
+    except Exception:
+        pass
     summary = LIVE_EVENTS.get_recent(1)
     if summary and _is_live():
         ALPHA.memory.add_turn("gateway", f"[{source}] {summary[0]['summary']}")
@@ -461,6 +513,10 @@ async def lifespan(app: FastAPI):
     await sync_runtime_config(sync_voice=True, only_missing=False)
     await _init_bridges()
     _start_event_streams()
+    try:
+        await TAILSCALE.refresh()
+    except Exception:
+        pass
     asyncio.create_task(_tailscale_loop())
     asyncio.create_task(_mcp_refresh_loop())
     await MCP_REGISTRY.refresh(sample_data=True)
@@ -482,10 +538,27 @@ async def _tailscale_loop():
             ALPHA.memory.update_tailscale(**{k: v for k, v in ts.items() if v is not None})
         except Exception:
             pass
-        await asyncio.sleep(60)
+        await asyncio.sleep(5)
 
 
 app = FastAPI(title="Alpha OS", version="0.1.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def api_auth_middleware(request: Request, call_next):
+    from alpha_os.auth import (
+        extract_token_from_request,
+        requires_auth,
+        token_valid,
+    )
+
+    if requires_auth(request.url.path):
+        if not token_valid(extract_token_from_request(request)):
+            return JSONResponse(
+                status_code=401,
+                content={"ok": False, "error": "Unauthorized"},
+            )
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -610,6 +683,7 @@ class ConfigRequest(BaseModel):
     runtime: Optional[str] = None
     hermes_gateway_url: Optional[str] = None
     hermes_api_key: Optional[str] = None
+    elevenlabs_api_key: Optional[str] = None
     openclaw_ws_url: Optional[str] = None
     openclaw_token: Optional[str] = None
 
@@ -634,8 +708,32 @@ class VoiceConfigRequest(BaseModel):
     stt_model: Optional[str] = None
     tts_provider: Optional[str] = None
     tts_voice: Optional[str] = None
+    tts_model: Optional[str] = None
     provider_id: Optional[str] = None
     provider_enabled: Optional[bool] = None
+
+
+class TtsRequest(BaseModel):
+    text: str
+    provider: Optional[str] = None
+    voice: Optional[str] = None
+
+
+class ProfileSwitchRequest(BaseModel):
+    profile: str
+
+
+class ProfileAgentRequest(BaseModel):
+    model_provider: Optional[str] = None
+    model_default: Optional[str] = None
+    disabled_toolsets: Optional[list[str]] = None
+    mcp_enabled: Optional[dict[str, bool]] = None
+
+
+class VoiceUsageReport(BaseModel):
+    kind: str  # "tts" | "stt"
+    provider: Optional[str] = None
+    characters: int = 0
 
 
 @app.get("/health")
@@ -725,7 +823,18 @@ async def api_command(req: CommandRequest):
 
     if _is_live():
         ALPHA.memory.add_turn("alpha", reply)
-        LIVE_EVENTS.push("command", {"type": "command", "text": cmd, "reply": reply[:120]})
+        cmd_event = {"type": "command", "text": cmd, "reply": reply[:120]}
+        LIVE_EVENTS.push("command", cmd_event)
+        try:
+            from alpha_os.config import active_hermes_profile
+
+            PROFILE_ACTIVITY.record_event(
+                "command",
+                cmd_event,
+                fallback_profile=active_hermes_profile(),
+            )
+        except Exception:
+            pass
     return {
         "reply": reply,
         "ok": ok,
@@ -766,8 +875,14 @@ async def voice_config_get():
 
 @app.post("/api/voice/config")
 async def voice_config_post(req: VoiceConfigRequest):
+    from alpha_os.voice.hermes_reload import reload_hermes_gateway
+
     voice_cfg = apply_voice_config(_voice_request_payload(req))
     await _restart_voice_loop()
+    reload_result = await reload_hermes_gateway(
+        HERMES_BRIDGE.gateway_url,
+        hermes_connected=HERMES_BRIDGE._connected,
+    )
     from alpha_os.voice import get_voice_providers
     return {
         "ok": True,
@@ -780,11 +895,40 @@ async def voice_config_post(req: VoiceConfigRequest):
                 runtime=_active_runtime,
             ),
         },
+        "hermes_reload": reload_result,
     }
+
+
+@app.post("/api/voice/tts")
+async def voice_tts(req: TtsRequest):
+    from alpha_os.voice.tts_stream import synthesize_tts
+
+    result = await synthesize_tts(
+        req.text,
+        provider=req.provider,
+        voice=req.voice,
+        hermes_gateway_url=HERMES_BRIDGE.gateway_url,
+        hermes_connected=HERMES_BRIDGE._connected,
+    )
+    if not result or not result.audio:
+        return JSONResponse(
+            status_code=502,
+            content={"ok": False, "error": "TTS synthesis failed"},
+        )
+    return Response(content=result.audio, media_type=result.content_type)
+
+
+@app.get("/api/voice/elevenlabs/voices")
+async def voice_elevenlabs_voices(search: Optional[str] = None, page_size: int = 100):
+    from alpha_os.voice.elevenlabs import list_elevenlabs_voices
+
+    return await list_elevenlabs_voices(search=search, page_size=page_size)
 
 
 @app.get("/api/voice/status")
 async def voice_status():
+    from alpha_os.voice.live import build_voice_live
+
     voice_cfg = load_voice_config()
     try:
         from alpha_os.voice import get_voice_providers, voice_available
@@ -805,16 +949,46 @@ async def voice_status():
         available = False
         providers = []
         grok_oauth = False
+    live = build_voice_live()
     return {
         "server_voice": available and bool(voice_cfg.get("server_wake", False)),
         "browser_voice": bool(voice_cfg.get("browser_wake", True)),
         "wake_word": str(voice_cfg.get("wake_word", "hey alpha")),
         "wake_word_engine": "phrase",
         "grok_oauth": grok_oauth and bool(voice_cfg.get("grok_oauth", True)),
-        "voice_via": "hermes_grok_oauth",
+        "voice_via": live.get("tts_provider_label"),
         "hermes_config": voice_cfg.get("hermes_config_path"),
         "providers": providers,
+        "live": live,
     }
+
+
+@app.get("/api/voice/live")
+async def voice_live():
+    from alpha_os.voice.live import build_voice_live
+
+    return {"ok": True, "live": build_voice_live()}
+
+
+@app.post("/api/voice/usage")
+async def voice_usage_report(req: VoiceUsageReport):
+    from alpha_os.voice.live import build_voice_live
+    from alpha_os.voice.usage import voice_usage_session
+
+    kind = (req.kind or "").strip().lower()
+    provider = (req.provider or "unknown").strip().lower()
+    chars = max(0, req.characters)
+    session = voice_usage_session()
+    if kind == "stt":
+        session.record_stt(provider=provider, characters=chars)
+    elif kind == "tts":
+        session.record_tts(provider=provider, characters=chars)
+    else:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": "kind must be tts or stt"},
+        )
+    return {"ok": True, "live": build_voice_live()}
 
 
 @app.get("/api/hermes/status")
@@ -870,12 +1044,13 @@ async def api_config_get():
 
     cfg = load_config()
     hermes = cfg.get("hermes") or {}
+    env = read_hermes_env()
     key = str(hermes.get("api_key") or "")
     if not key:
-        env = read_hermes_env()
         key = env.get("API_SERVER_KEY") or env.get("HERMES_API_KEY") or ""
 
     voice = load_voice_config()
+    el_key = env.get("ELEVENLABS_API_KEY") or ""
     return {
         **cfg,
         "hermes": {
@@ -886,6 +1061,10 @@ async def api_config_get():
             "profile": voice.get("hermes_profile") or hermes.get("profile"),
             "config_path": voice.get("hermes_config_path"),
             "snapshot": hermes_config_snapshot(),
+        },
+        "elevenlabs": {
+            "api_key_masked": _mask_secret(el_key),
+            "api_key_set": bool(el_key),
         },
         "voice_live": voice,
         "runtime_env": runtime_summary(),
@@ -931,6 +1110,8 @@ async def api_config_post(req: ConfigRequest):
             req.hermes_gateway_url,
             req.hermes_api_key or str(get("hermes.api_key", "")),
         )
+    if req.elevenlabs_api_key:
+        set_hermes_env({"ELEVENLABS_API_KEY": req.elevenlabs_api_key.strip()})
     await _init_bridges()
     return {"ok": True, "config": await api_config_get()}
 
@@ -956,6 +1137,135 @@ async def api_config_reload():
     return {"ok": True, "voice": voice, "config": await api_config_get()}
 
 
+@app.get("/api/hermes/profiles")
+async def api_hermes_profiles():
+    from alpha_os.profile_config import list_profile_summaries
+
+    return {"ok": True, "profiles": list_profile_summaries()}
+
+
+@app.get("/api/hermes/profiles/{name}")
+async def api_hermes_profile_detail(name: str):
+    from alpha_os.profile_config import profile_summary
+
+    summary = profile_summary(name)
+    if not summary.get("config_path"):
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Profile not found"})
+    return {"ok": True, "profile": summary}
+
+
+@app.get("/api/hermes/profiles/{name}/voice")
+async def api_hermes_profile_voice(name: str):
+    from alpha_os.voice import get_voice_providers
+
+    voice = load_voice_config(profile=name)
+    return {
+        "ok": True,
+        "voice": {
+            **voice,
+            "enabled": bool(voice.get("server_wake", False)),
+            "providers": get_voice_providers(
+                hermes_connected=HERMES_BRIDGE._connected,
+                openclaw_connected=OPENCLAW_BRIDGE._connected,
+                runtime=_active_runtime,
+            ),
+        },
+    }
+
+
+@app.post("/api/hermes/profiles/switch")
+async def api_hermes_profile_switch(req: ProfileSwitchRequest):
+    from alpha_os.config import set_active_hermes_profile
+    from alpha_os.voice.hermes_sync import sync_voice_to_alpha_os
+
+    name = (req.profile or "").strip()
+    if not name:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Profile name required"})
+    set_active_hermes_profile(name)
+    voice = sync_voice_to_alpha_os()
+    await _restart_voice_loop()
+    return {"ok": True, "profile": name, "voice": voice}
+
+
+@app.post("/api/hermes/profiles/{name}/agent")
+async def api_hermes_profile_agent(name: str, req: ProfileAgentRequest):
+    from alpha_os.profile_config import apply_profile_agent_config
+    from alpha_os.voice.hermes_reload import reload_hermes_gateway
+
+    summary = apply_profile_agent_config(
+        name,
+        model_provider=req.model_provider,
+        model_default=req.model_default,
+        disabled_toolsets=req.disabled_toolsets,
+        mcp_enabled=req.mcp_enabled,
+    )
+    reload_result = await reload_hermes_gateway(
+        HERMES_BRIDGE.gateway_url,
+        hermes_connected=HERMES_BRIDGE._connected,
+    )
+    return {"ok": True, "profile": summary, "hermes_reload": reload_result}
+
+
+@app.get("/api/hermes/profiles/{name}/skills/{skill_path:path}")
+async def api_hermes_profile_skill(name: str, skill_path: str):
+    from alpha_os.profile_config import read_skill_markdown
+
+    result = read_skill_markdown(name, skill_path)
+    if not result.get("ok"):
+        return JSONResponse(status_code=404, content=result)
+    return result
+
+
+@app.get("/api/system/info")
+async def api_system_info():
+    import platform
+
+    uname = platform.uname()
+    is_ubuntu = "ubuntu" in uname.system.lower() or "ubuntu" in uname.version.lower()
+    return {
+        "ok": True,
+        "system": uname.system,
+        "release": uname.release,
+        "version": uname.version,
+        "machine": uname.machine,
+        "ubuntu": is_ubuntu,
+        "reboot_available": is_ubuntu,
+    }
+
+
+@app.post("/api/system/reboot")
+async def api_system_reboot():
+    import platform
+    import subprocess
+
+    uname = platform.uname()
+    is_ubuntu = "ubuntu" in uname.system.lower() or "ubuntu" in uname.version.lower()
+    if not is_ubuntu:
+        return JSONResponse(
+            status_code=403,
+            content={"ok": False, "error": "Reboot is only available on Ubuntu"},
+        )
+    try:
+        proc = subprocess.run(
+            ["sudo", "-n", "reboot"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "ok": False,
+                    "error": proc.stderr.strip() or "sudo reboot failed (passwordless sudo required)",
+                },
+            )
+        return {"ok": True, "detail": "Reboot initiated"}
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+
+
 @app.post("/api/reconnect")
 async def api_reconnect():
     from alpha_os.runtime_sync import sync_runtime_config
@@ -969,6 +1279,12 @@ async def api_reconnect():
 async def ws_state(ws: WebSocket):
     import hashlib
     import json
+
+    from alpha_os.auth import auth_enabled, extract_token_from_websocket, token_valid
+
+    if auth_enabled() and not token_valid(extract_token_from_websocket(ws)):
+        await ws.close(code=4401)
+        return
 
     await ws.accept()
     last_hash = ""

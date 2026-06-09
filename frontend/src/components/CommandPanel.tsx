@@ -2,8 +2,11 @@
 
 import { useState } from "react";
 import { sendCommand } from "@/lib/api";
+import { memo } from "react";
 import { ActivityOrb } from "./ActivityOrb";
+import { VoiceLiveBar } from "./VoiceLiveBar";
 import type { WakeWordStatus } from "@/hooks/useWakeWordListener";
+import type { VoiceLive } from "@/types/state";
 
 interface CommandPanelProps {
   greeting: string;
@@ -12,6 +15,9 @@ interface CommandPanelProps {
   wakeStatus?: WakeWordStatus;
   wakeDetail?: string;
   wakeWord?: string;
+  voiceLive?: VoiceLive | null;
+  speaking?: boolean;
+  lastVoiceActivity?: { kind: "tts" | "stt"; chars: number } | null;
   onLog: (msg: string, who?: string) => void;
   onReply?: (reply: string) => void;
 }
@@ -37,13 +43,16 @@ function wakeStatusLabel(
   }
 }
 
-export function CommandPanel({
+export const CommandPanel = memo(function CommandPanel({
   greeting,
   orbPulse,
   hasActivity,
   wakeStatus = "idle",
   wakeDetail,
   wakeWord = "hey alpha",
+  voiceLive,
+  speaking = false,
+  lastVoiceActivity,
   onLog,
   onReply,
 }: CommandPanelProps) {
@@ -80,9 +89,9 @@ export function CommandPanel({
           <div
             className={`mt-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] transition ${
               voiceHot
-                ? "border-[#ff3366]/60 bg-[#ff3366]/15 text-pink-300 shadow-[0_0_18px_rgba(255,51,102,0.25)]"
+                ? "perf-lite-shadow border-[#ff3366]/60 bg-[#ff3366]/15 text-pink-300 sm:shadow-[0_0_18px_rgba(255,51,102,0.25)]"
                 : voiceActive
-                  ? "border-cyan-800/60 bg-cyan-950/40 text-cyan-300 shadow-[0_0_12px_rgba(34,211,238,0.15)]"
+                  ? "perf-lite-shadow border-cyan-800/60 bg-cyan-950/40 text-cyan-300 sm:shadow-[0_0_12px_rgba(34,211,238,0.15)]"
                   : "border-slate-800 bg-[#0a0a0f] text-slate-500"
             }`}
           >
@@ -97,6 +106,12 @@ export function CommandPanel({
             />
             {wakeStatusLabel(wakeStatus, wakeWord, wakeDetail)}
           </div>
+          <VoiceLiveBar
+            voiceLive={voiceLive}
+            wakeStatus={wakeStatus}
+            speaking={speaking}
+            lastActivity={lastVoiceActivity}
+          />
         </div>
       </div>
       <div className="mt-auto flex gap-2">
@@ -119,4 +134,4 @@ export function CommandPanel({
       </div>
     </section>
   );
-}
+});

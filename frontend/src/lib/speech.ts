@@ -1,6 +1,6 @@
 /** Alpha reply speech — server TTS stream with browser synthesis fallback. */
 
-import { fetchTtsAudio } from "@/lib/api";
+import { fetchTtsAudio, reportVoiceUsage } from "@/lib/api";
 
 let voicesReady = false;
 let activeAudio: HTMLAudioElement | null = null;
@@ -64,7 +64,10 @@ function speakBrowser(text: string, voiceHint?: string): void {
   window.speechSynthesis.speak(utterance);
 }
 
-async function playAudioBlob(blob: Blob): Promise<boolean> {
+async function playAudioBlob(
+  blob: Blob,
+  onDone?: () => void
+): Promise<boolean> {
   if (typeof window === "undefined") return false;
 
   stopAlphaSpeech();
@@ -77,6 +80,7 @@ async function playAudioBlob(blob: Blob): Promise<boolean> {
     const cleanup = () => {
       URL.revokeObjectURL(url);
       if (activeAudio === audio) activeAudio = null;
+      onDone?.();
     };
     audio.onended = () => {
       cleanup();
@@ -93,26 +97,53 @@ async function playAudioBlob(blob: Blob): Promise<boolean> {
   });
 }
 
+export type SpeakAlphaOptions = {
+  voiceHint?: string;
+  provider?: string;
+  onSpeakingChange?: (speaking: boolean) => void;
+};
+
 export async function speakAlphaReply(
   text: string,
-  voiceHint?: string,
-  provider?: string
+  voiceHintOrOpts?: string | SpeakAlphaOptions,
+  legacyProvider?: string
 ): Promise<void> {
+  const opts: SpeakAlphaOptions =
+    typeof voiceHintOrOpts === "object" && voiceHintOrOpts !== null
+      ? voiceHintOrOpts
+      : { voiceHint: voiceHintOrOpts, provider: legacyProvider };
+
   const trimmed = text.trim();
   if (!trimmed || typeof window === "undefined") return;
+
+  const provider = opts.provider;
+  const voiceHint = opts.voiceHint;
+  const stopSpeaking = () => opts.onSpeakingChange?.(false);
 
   const useServer =
     provider === "edge" ||
     provider === "grok" ||
     provider === "xai" ||
+    provider === "elevenlabs" ||
+    provider === "neutts" ||
+    provider === "piper" ||
+    provider === "kittentts" ||
     !provider;
 
   if (useServer) {
     try {
       const blob = await fetchTtsAudio(trimmed, provider, voiceHint);
       if (blob) {
-        const played = await playAudioBlob(blob);
-        if (played) return;
+        opts.onSpeakingChange?.(true);
+        const played = await playAudioBlob(blob, stopSpeaking);
+        if (played) {
+          void reportVoiceUsage({
+            kind: "tts",
+            provider: provider ?? "edge",
+            characters: trimmed.length,
+          });
+          return;
+        }
       }
     } catch {
       // Fall through to browser TTS.
@@ -123,12 +154,24 @@ export async function speakAlphaReply(
 
   if (window.speechSynthesis.getVoices().length > 0) {
     speakBrowser(trimmed, voiceHint);
+    void reportVoiceUsage({
+      kind: "tts",
+      provider: "browser",
+      characters: trimmed.length,
+    });
+    stopSpeaking();
     return;
   }
 
   const retry = () => {
     window.speechSynthesis.onvoiceschanged = null;
     speakBrowser(trimmed, voiceHint);
+    void reportVoiceUsage({
+      kind: "tts",
+      provider: "browser",
+      characters: trimmed.length,
+    });
+    stopSpeaking();
   };
   window.speechSynthesis.onvoiceschanged = retry;
   window.speechSynthesis.getVoices();

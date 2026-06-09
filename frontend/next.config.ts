@@ -17,6 +17,33 @@ const nextConfig: NextConfig = {
     "localhost",
     ...tailscaleDevOrigins(),
   ],
+  poweredByHeader: false,
+  compress: true,
+  experimental: {
+    optimizePackageImports: ["@/components", "@/hooks", "@/lib"],
+  },
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          {
+            key: "X-DNS-Prefetch-Control",
+            value: "on",
+          },
+        ],
+      },
+      {
+        source: "/_next/static/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+          },
+        ],
+      },
+    ];
+  },
   async rewrites() {
     const api =
       process.env.INTERNAL_API_URL ??

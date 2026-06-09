@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from alpha_os.voice.elevenlabs import elevenlabs_configured
 from alpha_os.voice.grok_oauth import grok_via_runtime_oauth, hermes_installed, openclaw_grok_oauth_configured
 from alpha_os.voice.hermes_sync import load_voice_config
+from alpha_os.voice.labels import tts_provider_label
 
 
 def get_voice_providers(
@@ -72,6 +74,45 @@ def get_voice_providers(
         server_wake = True
     except ImportError:
         pass
+
+    tts_prov = str(voice_cfg.get("tts_provider") or "edge").lower()
+    providers.append({
+        "id": "tts_active",
+        "label": f"TTS: {tts_provider_label(tts_prov)}",
+        "kind": "tts",
+        "available": True,
+        "enabled": bool(voice_cfg.get("auto_tts", True)),
+        "note": f"Voice: {voice_cfg.get('tts_voice', '—')}",
+    })
+
+    for local_id, local_label in (
+        ("edge", "Edge TTS (free, local synth)"),
+        ("neutts", "NeuTTS (local GPU/CPU)"),
+        ("piper", "Piper (local)"),
+        ("kittentts", "KittenTTS (local)"),
+    ):
+        providers.append({
+            "id": local_id,
+            "label": local_label,
+            "kind": "tts",
+            "available": local_id == "edge" or tts_prov == local_id,
+            "enabled": tts_prov == local_id,
+            "note": "No API key — runs on this machine" if local_id != "edge" else "Microsoft Edge voices",
+        })
+
+    el_ready = elevenlabs_configured()
+    providers.append({
+        "id": "elevenlabs",
+        "label": "ElevenLabs (voice library)",
+        "kind": "tts",
+        "available": el_ready,
+        "enabled": el_ready and str(voice_cfg.get("tts_provider") or "").lower() == "elevenlabs",
+        "note": (
+            "Premium TTS via ElevenLabs voice library — set ELEVENLABS_API_KEY in ~/.hermes/.env"
+            if not el_ready
+            else f"Voice: {voice_cfg.get('tts_voice', '—')}"
+        ),
+    })
 
     providers.append({
         "id": "server_wake",
