@@ -7,6 +7,7 @@ import { ConnectScreen } from "@/components/ConnectScreen";
 import { LoadingScreen } from "@/components/LoadingScreen";
 import { GridBackground } from "@/components/GridBackground";
 import { MetricsBar } from "@/components/MetricsBar";
+import { ProfileAgentsRow } from "@/components/ProfileAgentsRow";
 import { SettingsDrawer } from "@/components/SettingsDrawer";
 import { SidePanels } from "@/components/SidePanels";
 import { ViewCustomizer } from "@/components/ViewCustomizer";
@@ -150,13 +151,16 @@ export default function DashboardPage() {
       />
 
       {live && isWidgetOn("metrics") && (
-        <MetricsBar
-          metrics={state.metrics}
-          polymarket={state.polymarket}
-          history={metricHistory}
-          gatewayOnline={gatewayOnline}
-          pulseKey={pulseKey}
-        />
+        <>
+          <MetricsBar
+            metrics={state.metrics}
+            polymarket={state.polymarket}
+            history={metricHistory}
+            gatewayOnline={gatewayOnline}
+            pulseKey={pulseKey}
+          />
+          <ProfileAgentsRow profiles={state.profile_agents ?? []} />
+        </>
       )}
 
       {loading ? (
@@ -164,7 +168,10 @@ export default function DashboardPage() {
       ) : !live ? (
         <ConnectScreen
           hermesInstalled={Boolean(state.hermes_installed)}
+          openclawInstalled={Boolean(state.openclaw?.gateway_url) || state.openclaw_connected}
           hermesConnected={state.hermes_connected}
+          openclawConnected={state.openclaw_connected}
+          runtimePreference={state.runtime}
           onOpenSettings={() => setSettingsOpen(true)}
           onReconnect={reconnect}
         />

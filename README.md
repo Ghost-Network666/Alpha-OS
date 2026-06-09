@@ -29,13 +29,27 @@ This installs:
 - Next.js 15 frontend (`frontend/`, npm install)
 - Node.js via nvm if not already present
 
-Then start:
+Then start (production — recommended):
+
+```bash
+./scripts/install-systemd.sh
+systemctl --user start alpha-os-backend alpha-os-frontend alpha-os-tailscale
+```
+
+Open **http://127.0.0.1:4000** (frontend) — API runs on **http://127.0.0.1:8081** (or the next free port if 8080 is taken).
+
+Dev mode:
 
 ```bash
 ./scripts/start.sh
 ```
 
-Open **http://127.0.0.1:3000** (frontend) — API runs on **http://127.0.0.1:8080**.
+**Remote access (any device on your Tailscale tailnet):**
+
+```bash
+./scripts/tailscale-serve.sh
+# → https://<your-machine>.ts.net/
+```
 
 Or use the CLI:
 

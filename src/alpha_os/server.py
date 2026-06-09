@@ -20,7 +20,7 @@ from alpha_os.install_config import _tailscale_dns_name
 from alpha_os.logging_config import log_exception, log_path, setup_logging, write_log_line
 from alpha_os.bridges.hermes_bridge import HermesBridge
 from alpha_os.bridges.openclaw_bridge import OpenClawBridge
-from alpha_os.bridges.detector import detect_best
+from alpha_os.bridges.detector import color_for_index, detect_best
 from alpha_os.config import get, load_config, set_hermes_env, set_key
 from alpha_os.voice.hermes_sync import apply_voice_config, load_voice_config
 from alpha_os.core.alpha import Alpha
@@ -210,6 +210,52 @@ def _build_integrations() -> dict[str, Any]:
     }
 
 
+def _build_profile_agents(
+    *,
+    gateway_online: bool,
+    active_runtime: str,
+) -> list[dict[str, Any]]:
+    """Hermes profile agents for the dashboard row (alpha, rewards, trader, …)."""
+    from alpha_os.config import (
+        active_hermes_profile,
+        list_hermes_profiles,
+        read_hermes_profile_config,
+    )
+
+    if not _hermes_installed():
+        return []
+
+    active = active_hermes_profile()
+    cards: list[dict[str, Any]] = []
+    for i, name in enumerate(list_hermes_profiles()):
+        cfg = read_hermes_profile_config(name)
+        model = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+        model_default = str(model.get("default") or "").strip() or None
+        model_provider = str(model.get("provider") or "").strip() or None
+        is_active = name == active
+        if is_active and gateway_online and active_runtime == "hermes":
+            status = "LIVE"
+        elif is_active:
+            status = "ACTIVE"
+        else:
+            status = "STANDBY"
+        title_parts = [p for p in (model_default, model_provider) if p]
+        cards.append(
+            {
+                "id": f"profile-{name}",
+                "kind": "profile",
+                "name": name,
+                "title": " · ".join(title_parts) if title_parts else "Hermes profile",
+                "model": model_default,
+                "provider": model_provider,
+                "status": status,
+                "active": is_active,
+                "color": color_for_index(i),
+            }
+        )
+    return cards
+
+
 async def _build_state() -> dict[str, Any]:
     global _last_hermes_retry, _last_oc_retry, _active_runtime
     now = time.time()
@@ -253,6 +299,7 @@ async def _build_state() -> dict[str, Any]:
         data.update(_empty_panel_state())
         data["capabilities"] = []
         data["agents"] = []
+        data["profile_agents"] = []
     else:
         integrations = _build_integrations()
         if not gateway_online:
@@ -281,9 +328,15 @@ async def _build_state() -> dict[str, Any]:
         cap_toolsets = sum(1 for c in capabilities if c.get("kind") == "toolset")
         cap_skills = sum(1 for c in capabilities if c.get("kind") == "skill")
 
+        profile_agents = _build_profile_agents(
+            gateway_online=gateway_online,
+            active_runtime=_active_runtime,
+        )
+        data["profile_agents"] = profile_agents
+
         data["metrics"] = {
             "sessions": len(sessions),
-            "agents": 0,
+            "agents": len(profile_agents),
             "toolsets": cap_toolsets or len(toolsets),
             "skills": cap_skills or len(skills),
             "tools": tool_count,
@@ -587,7 +640,47 @@ class VoiceConfigRequest(BaseModel):
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "service": "alpha-os"}
+    from alpha_os import __version__
+
+    return {"ok": True, "service": "alpha-os", "version": __version__}
+
+
+@app.get("/ready")
+async def ready():
+    from alpha_os.auth import auth_enabled
+
+    return {
+        "ok": True,
+        "runtime": _active_runtime,
+        "auth": auth_enabled(),
+        "mcp_servers": MCP_REGISTRY.get_panel_data().get("server_count", 0),
+    }
+
+
+@app.get("/api/bootstrap")
+async def api_bootstrap():
+    """Frontend connection info — env from ~/.hermes/.env and ~/.openclaw/.env."""
+    import os
+
+    from alpha_os.auth import api_token as _api_token
+    from alpha_os.config import alpha_os_host, alpha_os_port, inject_runtime_env, runtime_env_sources
+
+    inject_runtime_env(_active_runtime)
+    host = alpha_os_host()
+    port = alpha_os_port()
+    token = _api_token()
+    ws_url = f"ws://{host}:{port}/ws/state"
+    if token:
+        ws_url = f"{ws_url}?token={token}"
+    return {
+        "ok": True,
+        "api_url": f"http://{host}:{port}",
+        "ws_url": ws_url,
+        "auth_required": bool(token),
+        "runtime": _active_runtime,
+        "env_sources": runtime_env_sources(_active_runtime),
+        "frontend_port": int(os.getenv("ALPHA_OS_FRONTEND_PORT", "4000")),
+    }
 
 
 @app.get("/")

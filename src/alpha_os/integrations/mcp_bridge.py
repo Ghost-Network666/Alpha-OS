@@ -6,7 +6,11 @@ import asyncio
 import logging
 from typing import Any, Callable
 
-from alpha_os.integrations.mcp_discovery import discover_mcp_servers, discovery_sources
+from alpha_os.integrations.mcp_discovery import (
+    config_paths_status,
+    discover_mcp_servers,
+    discovery_sources,
+)
 from alpha_os.integrations.mcp_humanize import (
     build_category_summary,
     enrich_tool,
@@ -39,17 +43,31 @@ class MCPBridge:
 
     def __init__(
         self,
-        name: str,
-        command: str,
-        args: list[str],
-        env: dict[str, str],
+        name_or_def: str | dict[str, Any],
+        command: str = "",
+        args: list[str] | None = None,
+        env: dict[str, str] | None = None,
         source: str = "",
     ):
-        self.name = name
-        self.command = command
-        self.args = args
-        self.env = env
-        self.source = source
+        if isinstance(name_or_def, dict):
+            d = name_or_def
+            self.name = str(d.get("name") or "")
+            self.command = str(d.get("command") or "")
+            self.args = list(d.get("args") or [])
+            self.env = dict(d.get("env") or {})
+            self.source = str(d.get("source") or "")
+            self.transport = str(d.get("transport") or "stdio")
+            self.probeable = bool(d.get("probeable", True))
+            self.definition = d
+        else:
+            self.name = name_or_def
+            self.command = command
+            self.args = args or []
+            self.env = env or {}
+            self.source = source
+            self.transport = "stdio"
+            self.probeable = True
+            self.definition = {}
         self._connected = False
         self._tools: list[dict[str, Any]] = []
         self._error: str | None = None
@@ -76,6 +94,11 @@ class MCPBridge:
                     return await fn(session)
 
     async def connect(self, *, sample_data: bool = True) -> bool:
+        if not self.probeable:
+            self._connected = False
+            self._tools = []
+            self._error = None
+            return False
         try:
             from mcp import ClientSession
             from mcp.client.stdio import stdio_client
@@ -166,10 +189,11 @@ class MCPBridge:
 
     def to_dict(self) -> dict[str, Any]:
         tools = self.get_tools()
-        return {
+        base: dict[str, Any] = {
             "name": self.name,
             "connected": self._connected,
-            "transport": "stdio",
+            "transport": self.transport,
+            "probeable": self.probeable,
             "tool_count": len(tools),
             "tools_online": sum(1 for t in tools if t.get("status") == "online"),
             "tools_offline": sum(1 for t in tools if t.get("status") == "offline"),
@@ -177,9 +201,14 @@ class MCPBridge:
             "categories": build_category_summary(tools),
             "widgets": self.get_widgets(),
             "error": self._error,
-            "command": self.command,
             "source": self.source,
         }
+        if self.probeable:
+            base["command"] = self.command
+        else:
+            base["url"] = self.definition.get("url")
+            base["status"] = "configured"
+        return base
 
 
 class MCPRegistry:
@@ -216,11 +245,37 @@ class MCPRegistry:
             if d.get("transport") == "stdio" and d.get("command")
         ]
 
-    async def refresh(self, *, sample_data: bool = True) -> dict[str, Any]:
+    def _empty_message(self, runtime: str) -> str:
+        paths = config_paths_status()
+        hermes = next((p for p in paths if p["runtime"] == "hermes"), None)
+        openclaw = next((p for p in paths if p["runtime"] == "openclaw"), None)
+        if runtime == "hermes":
+            path = hermes["path"] if hermes else "~/.hermes/config.yaml"
+            return f"No MCP servers in {path} — add mcp_servers entries (stdio command + args)"
+        if runtime == "openclaw":
+            path = openclaw["path"] if openclaw else "~/.openclaw/openclaw.json"
+            return f"No MCP servers in {path} — add mcp.servers entries (stdio or remote)"
+        return (
+            "No MCP servers found — configure stdio MCP in "
+            "~/.hermes/config.yaml (mcp_servers) or "
+            "~/.openclaw/openclaw.json (mcp.servers)"
+        )
+
+    async def refresh(
+        self,
+        runtime: str | None = None,
+        *,
+        sample_data: bool = True,
+    ) -> dict[str, Any]:
         import time
 
-        self._servers = self._load_definitions()
+        active_runtime = (runtime or "auto").lower()
+        defs = discover_mcp_servers(active_runtime)
+        self._servers = [MCPBridge(d) for d in defs if d.get("name")]
+        stdio = [s for s in self._servers if s.probeable and s.command]
+        remote = [s for s in self._servers if not s.probeable]
         if not self._servers:
+            empty_msg = self._empty_message(active_runtime)
             self._data = {
                 "connected": False,
                 "server_count": 0,
@@ -232,29 +287,29 @@ class MCPRegistry:
                 "servers_offline": 0,
                 "tools_online": 0,
                 "tools_offline": 0,
-                "error": (
-                    "No stdio MCP servers found — configure mcp_servers in "
-                    "~/.hermes/config.yaml or mcp.servers in ~/.openclaw/openclaw.json"
-                ),
+                "runtime": active_runtime,
+                "error": empty_msg,
+                "summary": empty_msg,
+                "config_paths": config_paths_status(),
                 "sources": discovery_sources(),
             }
             self._last_scan = time.time()
             return dict(self._data)
 
         results = await asyncio.gather(
-            *[s.connect(sample_data=sample_data) for s in self._servers],
+            *[s.connect(sample_data=sample_data) for s in stdio],
             return_exceptions=True,
         )
-        servers_out = []
+        servers_out = [s.to_dict() for s in remote]
         widgets: list[dict[str, Any]] = []
         all_tools: list[dict[str, Any]] = []
         total_tools = 0
         tools_online = 0
         tools_offline = 0
         servers_online = 0
-        any_connected = False
+        any_connected = bool(remote)
 
-        for bridge, res in zip(self._servers, results):
+        for bridge, res in zip(stdio, results):
             if isinstance(res, Exception):
                 bridge._error = str(res)[:200]
             if bridge._connected:
@@ -268,11 +323,14 @@ class MCPRegistry:
             widgets.extend(bridge.get_widgets())
             servers_out.append(bridge.to_dict())
 
-        servers_offline = len(self._servers) - servers_online
+        servers_offline = len(stdio) - servers_online
 
         self._data = {
             "connected": any_connected,
             "server_count": len(self._servers),
+            "stdio_count": len(stdio),
+            "remote_count": len(remote),
+            "runtime": active_runtime,
             "tool_count": total_tools,
             "servers_online": servers_online,
             "servers_offline": servers_offline,

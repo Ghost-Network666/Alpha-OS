@@ -18,6 +18,12 @@ fi
 source "$(dirname "$0")/_load-ports.sh"
 _alpha_os_load_ports
 FRONTEND_PORT="${ALPHA_OS_FRONTEND_PORT:-4000}"
+BACKEND_PORT="${ALPHA_OS_PORT:-8081}"
+BACKEND_HOST="${ALPHA_OS_HOST:-127.0.0.1}"
+export INTERNAL_API_URL="http://${BACKEND_HOST}:${BACKEND_PORT}"
+export NEXT_PUBLIC_API_PORT="${BACKEND_PORT}"
+export ALPHA_OS_PORT="${BACKEND_PORT}"
+export ALPHA_OS_HOST="${BACKEND_HOST}"
 
 if [[ ! -d "${ROOT}/frontend/.next" ]]; then
   echo "Frontend not built. Run: cd frontend && npm run build" >&2

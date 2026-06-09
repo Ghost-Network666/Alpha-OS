@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
 function backendBase(): string {
+  const direct = process.env.INTERNAL_API_URL?.trim();
+  if (direct) return direct.replace(/\/$/, "");
   const host = process.env.ALPHA_OS_HOST ?? "127.0.0.1";
-  const port = process.env.ALPHA_OS_PORT ?? "8080";
+  const port = process.env.ALPHA_OS_PORT ?? process.env.NEXT_PUBLIC_API_PORT ?? "8080";
   return `http://${host}:${port}`;
 }
 

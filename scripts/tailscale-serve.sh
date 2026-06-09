@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# Alpha OS — private HTTPS via Tailscale Serve (tailnet only, mic-safe)
+# Alpha OS — private HTTPS via Tailscale Serve (tailnet-wide, mic-safe)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# shellcheck disable=SC1091
+source "$(dirname "$0")/_load-ports.sh"
+_alpha_os_load_ports
 FRONTEND_PORT="${ALPHA_OS_FRONTEND_PORT:-4000}"
-BACKEND_PORT="${ALPHA_OS_PORT:-9000}"
+BACKEND_PORT="${ALPHA_OS_PORT:-8081}"
 
 if ! command -v tailscale &>/dev/null; then
   echo "Error: tailscale CLI not found. Install: https://tailscale.com/download"
@@ -16,10 +20,11 @@ if ! tailscale status &>/dev/null; then
   exit 1
 fi
 
-echo "▸ Configuring Tailscale Serve (tailnet only — not public)…"
+echo "▸ Configuring Tailscale Serve (tailnet only — reachable from any tailnet device)…"
 tailscale serve reset
+# Default: all HTTP paths → Next.js (proxies /api/* to backend at build/runtime)
 tailscale serve --bg "http://127.0.0.1:${FRONTEND_PORT}"
-tailscale serve --bg --set-path=/api "http://127.0.0.1:${BACKEND_PORT}"
+# WebSocket only — Next.js does not proxy /ws/state in production
 tailscale serve --bg --set-path=/ws "http://127.0.0.1:${BACKEND_PORT}"
 
 DNS_NAME="$(tailscale status --json 2>/dev/null | python3 -c "
@@ -31,19 +36,21 @@ print(dns)
 
 echo ""
 echo "════════════════════════════════════════════════════════"
-echo "  Alpha OS — private Tailscale HTTPS (mic enabled)"
+echo "  Alpha OS — Tailscale HTTPS (any device on your tailnet)"
 echo "════════════════════════════════════════════════════════"
 echo ""
 if [[ -n "${DNS_NAME}" ]]; then
   echo "  https://${DNS_NAME}/"
   echo ""
-  echo "  API:  https://${DNS_NAME}/api"
+  echo "  Works from any Wi‑Fi / location — phone, laptop, etc."
+  echo "  (Must be signed into Tailscale on that device.)"
+  echo ""
   echo "  WS:   wss://${DNS_NAME}/ws/state"
 else
   echo "  Run: tailscale serve status"
 fi
 echo ""
-echo "  Tailnet only — not exposed to the public internet."
-echo "  Do NOT use tailscale funnel unless you intend public access."
+echo "  Tailnet only — not on the public internet."
+echo "  For public (no Tailscale client), use: tailscale funnel"
 echo ""
 tailscale serve status

@@ -16,7 +16,7 @@ CONFIG_PATH = CONFIG_DIR / "config.yaml"
 
 
 def hermes_home() -> Path:
-    return hermes_root()
+    return HERMES_HOME
 
 
 def hermes_config_path_global() -> Path:
@@ -28,9 +28,45 @@ def hermes_env_path_global() -> Path:
 
 
 # Back-compat for imports expecting module-level paths (resolved once at import).
-HERMES_HOME = hermes_home()
+HERMES_HOME = hermes_root()
 HERMES_CONFIG_PATH = hermes_config_path_global()
 HERMES_ENV_PATH = hermes_env_path_global()
+OPENCLAW_HOME = openclaw_home()
+OPENCLAW_ENV_PATH = OPENCLAW_HOME / ".env"
+
+_ALPHA_OS_ENV_KEYS = frozenset(
+    {
+        "ALPHA_OS_PORT",
+        "ALPHA_OS_HOST",
+        "ALPHA_OS_FRONTEND_PORT",
+        "ALPHA_OS_FRONTEND_HOST",
+        "ALPHA_OS_WORKERS",
+        "ALPHA_OS_API_TOKEN",
+        "ALPHA_OS_HOME",
+    }
+)
+
+_HERMES_INJECT_KEYS = frozenset(
+    {
+        "HERMES_GATEWAY_URL",
+        "HERMES_API_KEY",
+        "API_SERVER_KEY",
+        "API_SERVER_HOST",
+        "API_SERVER_PORT",
+        "API_SERVER_ENABLED",
+    }
+)
+
+_OPENCLAW_INJECT_KEYS = frozenset(
+    {
+        "OPENCLAW_GATEWAY_URL",
+        "OPENCLAW_GATEWAY_TOKEN",
+        "OPENCLAW_GATEWAY_PORT",
+        "OPENCLAW_HOME",
+        "OPENCLAW_STATE_DIR",
+        "OPENCLAW_CONFIG_PATH",
+    }
+)
 
 
 def load_config() -> dict[str, Any]:
@@ -140,6 +176,14 @@ def read_hermes_config() -> dict[str, Any]:
     return _read_yaml(hermes_config_path())
 
 
+def read_hermes_profile_config(profile: str) -> dict[str, Any]:
+    """Read ~/.hermes/profiles/<name>/config.yaml."""
+    name = (profile or "").strip()
+    if not name:
+        return {}
+    return _read_yaml(hermes_home() / "profiles" / name / "config.yaml")
+
+
 def write_hermes_config(data: dict[str, Any], *, profile: str | None = None) -> None:
     path = hermes_config_path(profile)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -196,10 +240,9 @@ def profile_hermes_env_path(profile: str | None = None) -> Path:
 
 def set_hermes_env(keys: dict[str, str], *, profile: str | None = None) -> None:
     """Merge key=value pairs into ~/.hermes/.env and the active profile .env."""
-    global_env = hermes_env_path_global()
-    _merge_env_file(global_env, keys)
+    _merge_env_file(HERMES_ENV_PATH, keys)
     profile_path = profile_hermes_env_path(profile)
-    if profile_path != global_env:
+    if profile_path != HERMES_ENV_PATH:
         _merge_env_file(profile_path, keys)
 
 
@@ -240,19 +283,112 @@ def read_openclaw_config() -> dict[str, Any]:
     return {}
 
 
-def read_openclaw_env() -> dict[str, str]:
-    """Read ~/.openclaw/.env when present."""
-    env_path = openclaw_home() / ".env"
-    out: dict[str, str] = {}
-    if not env_path.exists():
-        return out
-    try:
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
+def openclaw_env_paths() -> list[Path]:
+    paths: list[Path] = []
+    state = os.getenv("OPENCLAW_STATE_DIR", "").strip()
+    if state:
+        paths.append(Path(state).expanduser() / ".env")
+    paths.append(OPENCLAW_ENV_PATH)
+    seen: set[str] = set()
+    out: list[Path] = []
+    for path in paths:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            out.append(path)
+    return out
+
+
+def _resolve_primary_runtime(runtime: str | None = None) -> str:
+    pref = (runtime or load_config().get("runtime") or "auto").lower()
+    if pref in ("hermes", "openclaw"):
+        return pref
+    if OPENCLAW_HOME.exists() and not HERMES_HOME.exists():
+        return "openclaw"
+    if HERMES_HOME.exists():
+        return "hermes"
+    if OPENCLAW_HOME.exists():
+        return "openclaw"
+    return "auto"
+
+
+def inject_runtime_env(runtime: str | None = None) -> dict[str, str]:
+    """Inject env from ~/.hermes/.env and ~/.openclaw/.env."""
+    primary = _resolve_primary_runtime(runtime)
+    hermes = read_hermes_env()
+    openclaw = read_openclaw_env()
+    primary_block = openclaw if primary == "openclaw" else hermes
+    force_keys = _ALPHA_OS_ENV_KEYS | _HERMES_INJECT_KEYS | _OPENCLAW_INJECT_KEYS
+
+    for block in (hermes, openclaw):
+        for key, value in block.items():
+            if not value:
                 continue
-            k, _, v = line.partition("=")
-            out.setdefault(k.strip(), v.strip().strip('"').strip("'"))
-    except Exception:
-        pass
+            if key not in os.environ:
+                os.environ[key] = value
+
+    for key, value in primary_block.items():
+        if not value:
+            continue
+        if key in force_keys:
+            os.environ[key] = value
+
+    return {**hermes, **openclaw}
+
+
+def runtime_env_sources(runtime: str | None = None) -> list[dict[str, str]]:
+    primary = _resolve_primary_runtime(runtime)
+    sources: list[dict[str, str]] = []
+    if HERMES_ENV_PATH.exists() or HERMES_HOME.exists():
+        sources.append(
+            {
+                "runtime": "hermes",
+                "path": str(HERMES_ENV_PATH),
+                "exists": HERMES_ENV_PATH.exists(),
+                "primary": primary == "hermes",
+            }
+        )
+    for path in openclaw_env_paths():
+        sources.append(
+            {
+                "runtime": "openclaw",
+                "path": str(path),
+                "exists": path.exists(),
+                "primary": primary == "openclaw",
+            }
+        )
+    return sources
+
+
+def alpha_os_port() -> int:
+    inject_runtime_env()
+    return int(os.getenv("ALPHA_OS_PORT", "8080"))
+
+
+def alpha_os_host() -> str:
+    inject_runtime_env()
+    return str(os.getenv("ALPHA_OS_HOST", "127.0.0.1"))
+
+
+def set_openclaw_env(keys: dict[str, str]) -> None:
+    """Merge key=value pairs into ~/.openclaw/.env (creates file if needed)."""
+    target = openclaw_env_paths()[-1]
+    _merge_env_file(target, keys)
+
+
+def read_openclaw_env() -> dict[str, str]:
+    """Read ~/.openclaw/.env (and OPENCLAW_STATE_DIR/.env when set)."""
+    out: dict[str, str] = {}
+    for env_path in openclaw_env_paths():
+        if not env_path.exists():
+            continue
+        try:
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                out.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+        except Exception:
+            pass
     return out

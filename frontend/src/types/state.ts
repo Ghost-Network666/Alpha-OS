@@ -7,6 +7,18 @@ export interface AgentCard {
   tool_count?: number;
 }
 
+export interface ProfileAgent {
+  id: string;
+  kind: "profile";
+  name: string;
+  title?: string;
+  model?: string | null;
+  provider?: string | null;
+  status: "LIVE" | "ACTIVE" | "STANDBY" | string;
+  active: boolean;
+  color?: string;
+}
+
 export interface CapabilityCard {
   id: string;
   kind: "toolset" | "skill" | "session" | "agent";
@@ -156,6 +168,7 @@ export interface VoiceConfig {
 
 export interface AlphaState {
   agents: AgentCard[];
+  profile_agents?: ProfileAgent[];
   capabilities?: CapabilityCard[];
   greeting: string;
   runtime: string;

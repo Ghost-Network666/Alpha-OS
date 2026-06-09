@@ -8,7 +8,7 @@ import {
   postVoiceConfig,
   reloadConfig,
 } from "@/lib/api";
-import type { AlphaState, VoiceConfig } from "@/types/state";
+import type { VoiceConfig } from "@/types/state";
 
 interface SettingsDrawerProps {
   open: boolean;
@@ -18,6 +18,15 @@ interface SettingsDrawerProps {
   voiceConfig?: VoiceConfig;
   onSaved: () => void;
 }
+
+type SettingsTab = "profiles" | "voice" | "gateway" | "runtime";
+
+const TABS: { id: SettingsTab; label: string }[] = [
+  { id: "profiles", label: "Profiles" },
+  { id: "voice", label: "Voice" },
+  { id: "gateway", label: "Gateway" },
+  { id: "runtime", label: "Runtime" },
+];
 
 const DEFAULT_VOICE: Partial<VoiceConfig> = {
   wake_word: "hey alpha",
@@ -77,6 +86,7 @@ export function SettingsDrawer({
   const [reloading, setReloading] = useState(false);
   const [saveNote, setSaveNote] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [tab, setTab] = useState<SettingsTab>("profiles");
 
   const applyVoice = useCallback((v: Partial<VoiceConfig>) => {
     const merged = { ...DEFAULT_VOICE, ...v };
@@ -239,24 +249,54 @@ export function SettingsDrawer({
           open ? "translate-x-0" : "translate-x-full"
         }`}
       >
-        <div className="mb-6 flex items-center justify-between">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-cyan-400">
-            Settings
-          </span>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-slate-500 hover:text-slate-300"
-          >
-            ✕
-          </button>
+        <div className="mb-4 border-b border-slate-800/80 pb-4">
+          <div className="mb-3 flex items-start justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-base font-bold tracking-[0.15em] text-[#00f5ff]">
+                  ALPHA
+                </span>
+                <span className="text-base font-light tracking-[0.25em] text-slate-500">
+                  OS
+                </span>
+              </div>
+              <p className="mt-1 text-[10px] uppercase tracking-[0.2em] text-slate-500">
+                Settings
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close settings"
+              className="rounded-lg border border-slate-800 px-2 py-1 text-slate-500 hover:border-slate-600 hover:text-slate-300"
+            >
+              ✕
+            </button>
+          </div>
+          <nav className="flex flex-wrap gap-1">
+            {TABS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setTab(item.id)}
+                className={`rounded-lg px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
+                  tab === item.id
+                    ? "border border-cyan-700/60 bg-cyan-950/40 text-cyan-300"
+                    : "border border-transparent text-slate-500 hover:text-cyan-400"
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
         </div>
 
         <div className="space-y-5 text-sm">
+          {tab === "profiles" && (
           <div>
             <div className="mb-2 flex items-center justify-between">
               <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">
-                Hermes profile
+                Hermes profiles
               </span>
               <div className="flex gap-2">
                 <button
@@ -299,10 +339,12 @@ export function SettingsDrawer({
               )}
             </select>
           </div>
+          )}
 
+          {tab === "voice" && (
           <div>
             <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">
-              Voice — Alpha OS
+              Voice & wake
             </div>
 
             <label className="mb-1 block text-[10px] text-slate-500">
@@ -343,11 +385,10 @@ export function SettingsDrawer({
               />
               Grok via X OAuth / SuperGrok
             </label>
-          </div>
 
-          <div>
+          <div className="mt-4">
             <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">
-              Hermes model
+              Model
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
@@ -375,9 +416,9 @@ export function SettingsDrawer({
             </div>
           </div>
 
-          <div>
+          <div className="mt-4">
             <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">
-              Hermes voice (gateway)
+              Speech I/O
             </div>
 
             <div className="grid grid-cols-2 gap-2">
@@ -551,25 +592,15 @@ export function SettingsDrawer({
               </div>
             )}
           </div>
+          </div>
+          )}
 
+          {tab === "gateway" && (
           <div>
             <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">
-              Runtime
+              Gateway connections
             </div>
-            <select
-              value={rt}
-              onChange={(e) => setRt(e.target.value)}
-              className="mb-2 w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-3 py-2 text-xs"
-            >
-              <option value="auto">Auto-detect</option>
-              <option value="hermes">Hermes</option>
-              <option value="openclaw">OpenClaw</option>
-            </select>
-            <p className="font-mono text-xs text-slate-400">
-              Active: {runtimeLabel}
-            </p>
-
-            <label className="mb-1 mt-3 block text-[10px] uppercase text-slate-500">
+            <label className="mb-1 block text-[10px] uppercase text-slate-500">
               Hermes API URL
             </label>
             <input
@@ -613,6 +644,31 @@ export function SettingsDrawer({
               className="w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-3 py-2 font-mono text-xs"
             />
           </div>
+          )}
+
+          {tab === "runtime" && (
+          <div>
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-500">
+              Alpha OS runtime
+            </div>
+            <select
+              value={rt}
+              onChange={(e) => setRt(e.target.value)}
+              className="mb-2 w-full rounded-lg border border-slate-700 bg-[#0a0a0f] px-3 py-2 text-xs"
+            >
+              <option value="auto">Auto-detect</option>
+              <option value="hermes">Hermes</option>
+              <option value="openclaw">OpenClaw</option>
+            </select>
+            <p className="font-mono text-xs text-slate-400">
+              Active: {runtimeLabel}
+            </p>
+            <p className="mt-3 text-[10px] leading-relaxed text-slate-600">
+              Alpha OS reads live data from your Hermes or OpenClaw gateway.
+              Use Gateway tab for API URLs and keys.
+            </p>
+          </div>
+          )}
 
           {saveNote && (
             <p className="text-[10px] text-emerald-600">{saveNote}</p>
@@ -627,7 +683,7 @@ export function SettingsDrawer({
             disabled={saving}
             className="w-full rounded-xl border border-cyan-800 bg-cyan-950/50 py-2 text-sm font-semibold text-cyan-300 hover:bg-cyan-900/40 disabled:opacity-50"
           >
-            {saving ? "Saving…" : "Save to ~/.hermes"}
+            {saving ? "Saving…" : "Save Alpha OS settings"}
           </button>
         </div>
       </aside>

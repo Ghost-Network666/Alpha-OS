@@ -24,6 +24,15 @@ logger = logging.getLogger("alpha_os.detector")
 HERMES_HOME = hermes_home()
 OPENCLAW_HOME = openclaw_home()
 
+
+def hermes_installed() -> bool:
+    return hermes_home().exists()
+
+
+def openclaw_installed() -> bool:
+    return openclaw_home().exists()
+
+
 PALETTE = ["#00f0ff", "#39ff14", "#ff2a6d", "#ff9f1c", "#7b2cbf"]
 
 

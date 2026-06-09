@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 USER_SYSTEMD="${HOME}/.config/systemd/user"
 mkdir -p "${USER_SYSTEMD}"
 
-chmod +x "${ROOT}/scripts/run-backend.sh" "${ROOT}/scripts/run-frontend.sh"
+chmod +x "${ROOT}/scripts/run-backend.sh" "${ROOT}/scripts/run-frontend.sh" "${ROOT}/scripts/tailscale-serve.sh"
 
 BACKEND_UNIT="${USER_SYSTEMD}/alpha-os-backend.service"
 FRONTEND_UNIT="${USER_SYSTEMD}/alpha-os-frontend.service"
@@ -64,11 +64,35 @@ if [[ -f "${USER_SYSTEMD}/alpha-mission-control.service" ]]; then
     "${USER_SYSTEMD}/alpha-mission-control.service.disabled" 2>/dev/null || true
 fi
 
+TAILSCALE_UNIT="${USER_SYSTEMD}/alpha-os-tailscale.service"
+cat > "${TAILSCALE_UNIT}" <<EOF
+[Unit]
+Description=Alpha OS Tailscale Serve (tailnet HTTPS)
+After=network-online.target alpha-os-frontend.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=${ROOT}/scripts/tailscale-serve.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+EOF
+
 systemctl --user daemon-reload
 systemctl --user enable alpha-os-backend.service alpha-os-frontend.service
+if command -v tailscale &>/dev/null; then
+  systemctl --user enable alpha-os-tailscale.service
+fi
 echo "✓ Installed user units:"
 echo "    alpha-os-backend.service"
 echo "    alpha-os-frontend.service"
+if command -v tailscale &>/dev/null; then
+  echo "    alpha-os-tailscale.service"
+fi
 echo ""
 echo "  systemctl --user start alpha-os-backend alpha-os-frontend"
 echo "  journalctl --user -u alpha-os-backend -f"

@@ -33,7 +33,7 @@ export const McpPanel = memo(function McpPanel({
     const q = query.trim().toLowerCase();
     return mcp.servers
       .map((s) => {
-        let tools = (s.tools ?? []).filter((t) => {
+        const tools = (s.tools ?? []).filter((t) => {
           if (categoryFilter && t.category && !categoryFilter(t.category)) return false;
           if (statusFilter === "online" && t.status !== "online") return false;
           if (statusFilter === "offline" && t.status !== "offline") return false;

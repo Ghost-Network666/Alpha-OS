@@ -17,6 +17,7 @@ const EMPTY_METRICS: AlphaState["metrics"] = {
 
 const EMPTY_STATE: AlphaState = {
   agents: [],
+  profile_agents: [],
   capabilities: [],
   greeting: "",
   runtime: "offline",
