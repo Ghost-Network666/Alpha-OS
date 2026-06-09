@@ -70,8 +70,10 @@ class HermesBridge:
                     return True
                 if r.status_code == 401:
                     self._auth_error = (
-                        "Hermes API key rejected (HTTP 401) — set API_SERVER_KEY in "
-                        "Settings → Gateway to match ~/.hermes/.env"
+                        "Hermes API key rejected (HTTP 401). If you changed "
+                        "API_SERVER_KEY in ~/.hermes/.env, restart the Hermes gateway "
+                        "(systemctl --user restart hermes-gateway-alpha), then Reconnect "
+                        "in Alpha OS. Otherwise set the key in Settings → Gateway."
                     )
                     return False
             except Exception:
@@ -319,6 +321,8 @@ class HermesBridge:
             "session_count": len(self._sessions),
             "capabilities": self._capabilities,
             "last_event": self._last_event,
+            "auth_error": self._auth_error,
+            "api_key_set": bool(self.api_key),
         }
 
     async def _post_with_auth_retry(
