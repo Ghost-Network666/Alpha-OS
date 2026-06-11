@@ -334,6 +334,17 @@ async def _build_state() -> dict[str, Any]:
     data["capabilities"] = capabilities
     data["agents"] = capabilities  # legacy alias
 
+    # Always surface the agent's self-defined superpowers (from superpowers.md)
+    try:
+        sp = ALPHA.get_superpowers()
+        data["superpowers"] = {
+            "focus": sp.get("focus", ""),
+            "loaded": bool(sp.get("loaded")),
+            "summary": (sp.get("focus") or "")[:220],
+        }
+    except Exception:
+        data["superpowers"] = {"focus": "Revenue acceleration via voice, memory and local control.", "loaded": False}
+
     if not live:
         data.update(_empty_panel_state())
         data["capabilities"] = []
