@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -22,7 +22,7 @@ class PersistentMemory:
         self._conn.row_factory = sqlite3.Row
         self._init_db()
         self.world = self._load_world()
-        self.session_started = datetime.utcnow().isoformat()
+        self.session_started = datetime.now(UTC).isoformat()
 
     def _init_db(self):
         self._conn.executescript("""
@@ -58,7 +58,7 @@ class PersistentMemory:
         return ws
 
     def _save_world_key(self, key: str, value: Any):
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
         self._conn.execute(
             """INSERT INTO world_state(key, value, updated_at)
                VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET
@@ -68,7 +68,7 @@ class PersistentMemory:
         self._conn.commit()
 
     def add_turn(self, speaker: str, text: str, meta: Optional[Dict] = None):
-        now = datetime.utcnow().isoformat(timespec="seconds")
+        now = datetime.now(UTC).isoformat(timespec="seconds")
         self._conn.execute(
             "INSERT INTO turns(timestamp,speaker,text,meta) VALUES(?,?,?,?)",
             (now, speaker, text, json.dumps(meta or {})),

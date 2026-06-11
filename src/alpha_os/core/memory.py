@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Any, Dict, List, Optional
 
 
@@ -27,11 +27,11 @@ class AlphaMemory:
         self.max_history = max_history
         self._turns: List[ConversationTurn] = []
         self.world = WorldState()
-        self.session_started = datetime.utcnow().isoformat()
+        self.session_started = datetime.now(UTC).isoformat()
 
     def add_turn(self, speaker: str, text: str, meta: Optional[Dict] = None):
         self._turns.append(ConversationTurn(
-            timestamp=datetime.utcnow().isoformat(timespec="seconds"),
+            timestamp=datetime.now(UTC).isoformat(timespec="seconds"),
             speaker=speaker,
             text=text,
             meta=meta or {},
