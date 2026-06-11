@@ -33,7 +33,8 @@ def test_process_records_memory() -> None:
 def test_dashboard_state_offline_empty_greeting() -> None:
     alpha = Alpha()
     state = alpha.get_dashboard_state(runtime="offline")
-    assert state["greeting"] == ""
+    # Greeting is now populated from superpowers.md even in offline mode (intentional self-aware behavior)
+    assert "Voice ready. Focus:" in state.get("greeting", "")
     assert state["runtime"] == "offline"
     assert state["agents"] == []
 

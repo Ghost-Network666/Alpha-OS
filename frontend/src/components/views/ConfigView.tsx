@@ -5,7 +5,7 @@ import { Settings2, Save } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
-import { API_BASE, postConfig, postVoiceConfig } from "@/lib/api";
+import { getHttpApiBase, postConfig, postVoiceConfig } from "@/lib/api";
 import type { VoiceConfig } from "@/types/state";
 
 const DEFAULT_VOICE: Partial<VoiceConfig> = {
@@ -77,7 +77,8 @@ export function ConfigView({ voiceConfig, runtime, live, onSaved }: ConfigViewPr
     setTtsVoice(v.tts_voice ?? "en-US-AriaNeural");
     setNote(null);
 
-    fetch(`${API_BASE}/api/config`)
+    const base = getHttpApiBase();
+    fetch(`${base}/api/config`)
       .then((r) => r.json())
       .then((cfg) => {
         if (cfg.runtime) setRt(cfg.runtime);
