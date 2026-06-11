@@ -20,3 +20,5 @@ Thumbs.db
 *.log
 node_modules/
 openclaw_plugin/dist/
+# Large bootstrap script (fetched on demand by install)
+get-pip.py
