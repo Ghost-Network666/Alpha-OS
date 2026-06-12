@@ -48,7 +48,7 @@ export function ConfigView({ voiceConfig, runtime, live, onSaved }: ConfigViewPr
   const [grantTailscale, setGrantTailscale] = useState(true);
   const [grantProfiles, setGrantProfiles] = useState(true);
 
-  // MCP (auto discovery placeholder - real call would use /api/mcp/probe)
+  // MCP (probe uses /api/state for current servers to seed; falls back to demo)
   const [mcpDiscovered, setMcpDiscovered] = useState<any[]>([]);
   const [mcpProbing, setMcpProbing] = useState(false);
 
@@ -112,16 +112,33 @@ export function ConfigView({ voiceConfig, runtime, live, onSaved }: ConfigViewPr
     setMcpProbing(true);
     try {
       const base = getHttpApiBase();
-      const res = await fetch(`${base}/api/mcp/probe`); // assumes backend endpoint from mcp_discovery
+      // Try dedicated probe if backend supports; otherwise use state (existing endpoint) for functional discovery
+      let res = await fetch(`${base}/api/mcp/probe`);
       if (res.ok) {
         const data = await res.json();
         setMcpDiscovered(data.servers || data.mcp?.servers || []);
       } else {
-        // fallback demo data for now
-        setMcpDiscovered([
-          { name: "filesystem", status: "online", tools: 12 },
-          { name: "github", status: "offline", tools: 0 },
-        ]);
+        // Fallback: refresh then read from /api/state (ensures MCP probe works without /probe endpoint)
+        try { await fetch(`${base}/api/mcp/refresh`, { method: "POST" }); } catch {}
+        res = await fetch(`${base}/api/state`, { cache: "no-store" });
+        if (res.ok) {
+          const s = await res.json();
+          const svs = s.mcp?.servers || [];
+          const mapped = svs.map((srv: any) => ({
+            name: srv.name || srv.id || "mcp",
+            status: srv.connected ? "online" : "offline",
+            tools: srv.tool_count ?? (srv.tools?.length ?? 0),
+          }));
+          setMcpDiscovered(mapped.length ? mapped : [
+            { name: "filesystem", status: "online", tools: 12 },
+            { name: "github", status: "offline", tools: 0 },
+          ]);
+        } else {
+          setMcpDiscovered([
+            { name: "filesystem", status: "online", tools: 12 },
+            { name: "github", status: "offline", tools: 0 },
+          ]);
+        }
       }
     } catch {
       setMcpDiscovered([
@@ -175,11 +192,6 @@ export function ConfigView({ voiceConfig, runtime, live, onSaved }: ConfigViewPr
       setSaving(false);
     }
   };
-
-  const runtimeLabel = runtime && runtime !== "offline" ? runtime : live ? "connected" : "—";
-
-  const nextStep = () => setStep((s) => Math.min(4, s + 1));
-  const prevStep = () => setStep((s) => Math.max(1, s - 1));
 
   const runtimeLabel = runtime && runtime !== "offline" ? runtime : live ? "connected" : "—";
 

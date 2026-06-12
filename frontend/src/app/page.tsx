@@ -321,20 +321,26 @@ export default function DashboardPage() {
             onCloseMobile={() => setMobileNavOpen(false)}
           />
           <div className="flex-1 min-h-0 overflow-auto p-3">
-            <div className="mb-4 p-3 rounded border border-amber-800 bg-amber-950/20 text-sm text-amber-300">
-              First-run setup recommended — switch to <strong>Config</strong> view in sidebar for the guided wizard (runtime choice, permissions, MCP, Kabal agents &amp; heartbeats).
-            </div>
-            <LazyConnectScreen
-              hermesInstalled={Boolean(state.hermes_installed)}
-              openclawInstalled={
-                Boolean(state.openclaw?.gateway_url) || state.openclaw_connected
-              }
-              hermesConnected={state.hermes_connected}
-              openclawConnected={state.openclaw_connected}
-              runtimePreference={state.runtime}
-              onOpenSettings={() => setSettingsOpen(true)}
-              onReconnect={reconnect}
-            />
+            {currentView === "command" ? (
+              <>
+                <div className="mb-4 p-3 rounded border border-amber-800 bg-amber-950/20 text-sm text-amber-300">
+                  First-run setup recommended — switch to <strong>Config</strong> view in sidebar for the guided wizard (runtime choice, permissions, MCP, Kabal agents &amp; heartbeats).
+                </div>
+                <LazyConnectScreen
+                  hermesInstalled={Boolean(state.hermes_installed)}
+                  openclawInstalled={
+                    Boolean(state.openclaw?.gateway_url) || state.openclaw_connected
+                  }
+                  hermesConnected={state.hermes_connected}
+                  openclawConnected={state.openclaw_connected}
+                  runtimePreference={state.runtime}
+                  onOpenSettings={() => setSettingsOpen(true)}
+                  onReconnect={reconnect}
+                />
+              </>
+            ) : (
+              renderView(currentView)
+            )}
           </div>
         </div>
       ) : (

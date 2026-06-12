@@ -67,7 +67,7 @@ export async function fetchSettings() {
   return res.json();
 }
 
-export async function postConfig(body: Record<string, string | undefined>) {
+export async function postConfig(body: Record<string, any>) {
   const res = await fetch(`${getHttpApiBase()}/api/config`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
