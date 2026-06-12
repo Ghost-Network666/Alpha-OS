@@ -10,6 +10,7 @@ import { SecureTailscaleRedirect } from "@/components/SecureTailscaleRedirect";
 import { ClientLogger } from "@/components/ClientLogger";
 import { TailscaleLiveBar } from "@/components/TailscaleLiveBar";
 import { TopBar } from "@/components/TopBar";
+import { Sidebar, ViewKey } from "@/components/Sidebar";
 import { useAlphaState } from "@/hooks/useAlphaState";
 import { useDashboardLayout } from "@/hooks/useDashboardLayout";
 import { useWakeWordListener } from "@/hooks/useWakeWordListener";
@@ -28,6 +29,8 @@ import {
 import { sendCommand } from "@/lib/api";
 import { speakAlphaReply } from "@/lib/speech";
 import type { CapabilityCard } from "@/types/state";
+import { ConfigView } from "@/components/views/ConfigView";
+import { KeysView } from "@/components/views/KeysView";
 
 export default function DashboardPage() {
   const { state, loading, reconnecting, reconnect, metricHistory, pulseKey } =
@@ -41,6 +44,13 @@ export default function DashboardPage() {
   } = useDashboardLayout();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [viewOpen, setViewOpen] = useState(false);
+  const [currentView, setCurrentView] = useState<ViewKey>("command");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  const handleViewChange = (view: ViewKey) => {
+    setCurrentView(view);
+    setMobileNavOpen(false); // close drawer on mobile after selection
+  };
   const [logs, setLogs] = useState<{ ts: string; who: string; msg: string }[]>(
     []
   );
@@ -150,6 +160,109 @@ export default function DashboardPage() {
     [mcpCategoryActive]
   );
 
+  const renderView = (view: ViewKey) => {
+    switch (view) {
+      case "command":
+        return (
+          <div className="space-y-3">
+            {isWidgetOn("metrics") && (
+              <>
+                <LazyMetricsBar
+                  metrics={state.metrics}
+                  polymarket={state.polymarket}
+                  history={metricHistory}
+                  gatewayOnline={gatewayOnline}
+                  pulseKey={pulseKey}
+                />
+                <LazyProfileAgentsRow profiles={state.profile_agents ?? []} />
+              </>
+            )}
+            {isWidgetOn("command") && (
+              <CommandPanel
+                greeting={state.greeting}
+                orbPulse={state.orb_pulse}
+                hasActivity={hasActivity}
+                wakeStatus={wakeStatus}
+                wakeDetail={wakeDetail}
+                wakeWord={wakeWord}
+                voiceLive={state.voice_live}
+                speaking={speaking}
+                lastVoiceActivity={lastVoiceActivity}
+                onLog={onLog}
+                onReply={speakReply}
+              />
+            )}
+            {isWidgetOn("telemetry") && (
+              <div className="widget-panel min-h-[12rem] flex-1 lg:min-h-0">
+                <LazyTelemetryPanel events={state.live_events} logs={logs} />
+              </div>
+            )}
+          </div>
+        );
+      case "agents":
+        return (
+          <div className="space-y-3">
+            {isWidgetOn("metrics") && (
+              <>
+                <LazyMetricsBar
+                  metrics={state.metrics}
+                  polymarket={state.polymarket}
+                  history={metricHistory}
+                  gatewayOnline={gatewayOnline}
+                  pulseKey={pulseKey}
+                />
+                <LazyProfileAgentsRow profiles={state.profile_agents ?? []} />
+              </>
+            )}
+            {isWidgetOn("capabilities") && (
+              <LazyCapabilitiesPanel
+                capabilities={capabilities}
+                gatewayOnline={gatewayOnline}
+              />
+            )}
+          </div>
+        );
+      case "mcp":
+        return (
+          <LazySidePanels
+            tailscale={state.tailscale}
+            integrations={state.integrations}
+            mcp={state.mcp}
+            gatewayOnline={gatewayOnline}
+            showTailscale={false}
+            showIntegrations={false}
+            showMcpTools={isWidgetOn("mcp_tools")}
+            showMcpData={isWidgetOn("mcp_data")}
+            mcpCategoryFilter={mcpCatFilter}
+            onMcpRefresh={() => reconnect()}
+          />
+        );
+      case "config":
+        return (
+          <ConfigView
+            voiceConfig={state.voice_config}
+            runtime={state.runtime}
+            live={live}
+            onSaved={reconnect}
+          />
+        );
+      case "keys":
+        return <KeysView />;
+      case "telemetry":
+        return (
+          <div className="widget-panel min-h-[12rem] flex-1 lg:min-h-0">
+            <LazyTelemetryPanel events={state.live_events} logs={logs} />
+          </div>
+        );
+      default:
+        return (
+          <div className="p-8 text-center text-slate-400">
+            View "{view}" coming soon. Use the sidebar to explore other sections.
+          </div>
+        );
+    }
+  };
+
   return (
     <div className="flex h-full min-h-screen flex-col">
       <ClientLogger />
@@ -174,6 +287,15 @@ export default function DashboardPage() {
 
       <TailscaleLiveBar tailscale={state.tailscale} />
 
+      {/* Mobile nav trigger */}
+      <button
+        onClick={() => setMobileNavOpen(true)}
+        className="fixed bottom-4 left-4 z-50 lg:hidden rounded-full bg-[#0a0a0f] border border-cyan-900/30 p-3 text-[#00f5ff] shadow-lg"
+        aria-label="Open navigation menu"
+      >
+        ☰
+      </button>
+
       {viewOpen && (
         <LazyViewCustomizer
           open={viewOpen}
@@ -186,93 +308,47 @@ export default function DashboardPage() {
         />
       )}
 
-      {live && isWidgetOn("metrics") && (
-        <>
-          <LazyMetricsBar
-            metrics={state.metrics}
-            polymarket={state.polymarket}
-            history={metricHistory}
-            gatewayOnline={gatewayOnline}
-            pulseKey={pulseKey}
-          />
-          <LazyProfileAgentsRow profiles={state.profile_agents ?? []} />
-        </>
-      )}
+      {/* Metrics and profile row are now included inside specific views (command/agents) for better layout spreading */}
 
       {loading ? (
         <DashboardSkeleton />
       ) : !live ? (
-        <LazyConnectScreen
-          hermesInstalled={Boolean(state.hermes_installed)}
-          openclawInstalled={
-            Boolean(state.openclaw?.gateway_url) || state.openclaw_connected
-          }
-          hermesConnected={state.hermes_connected}
-          openclawConnected={state.openclaw_connected}
-          runtimePreference={state.runtime}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onReconnect={reconnect}
-        />
-      ) : (
-        <main className="dashboard-main grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:grid-cols-12">
-          <div
-            className={`order-1 flex min-h-0 flex-col gap-3 ${
-              isWidgetOn("capabilities") ? "lg:order-2 lg:col-span-6" : "lg:col-span-9"
-            }`}
-          >
-            {isWidgetOn("command") && (
-              <div className="shrink-0">
-                <CommandPanel
-                  greeting={state.greeting}
-                  orbPulse={state.orb_pulse}
-                  hasActivity={hasActivity}
-                  wakeStatus={wakeStatus}
-                  wakeDetail={wakeDetail}
-                  wakeWord={wakeWord}
-                  voiceLive={state.voice_live}
-                  speaking={speaking}
-                  lastVoiceActivity={lastVoiceActivity}
-                  onLog={onLog}
-                  onReply={speakReply}
-                />
-              </div>
-            )}
-            {isWidgetOn("telemetry") && (
-              <div className="widget-panel min-h-[12rem] flex-1 lg:min-h-0">
-                <LazyTelemetryPanel events={state.live_events} logs={logs} />
-              </div>
-            )}
+        <div className="flex min-h-0 flex-1">
+          <Sidebar
+            currentView={currentView}
+            onViewChange={handleViewChange}
+            mobileOpen={mobileNavOpen}
+            onCloseMobile={() => setMobileNavOpen(false)}
+          />
+          <div className="flex-1 min-h-0 overflow-auto p-3">
+            <div className="mb-4 p-3 rounded border border-amber-800 bg-amber-950/20 text-sm text-amber-300">
+              First-run setup recommended — switch to <strong>Config</strong> view in sidebar for the guided wizard (runtime choice, permissions, MCP, Kabal agents &amp; heartbeats).
+            </div>
+            <LazyConnectScreen
+              hermesInstalled={Boolean(state.hermes_installed)}
+              openclawInstalled={
+                Boolean(state.openclaw?.gateway_url) || state.openclaw_connected
+              }
+              hermesConnected={state.hermes_connected}
+              openclawConnected={state.openclaw_connected}
+              runtimePreference={state.runtime}
+              onOpenSettings={() => setSettingsOpen(true)}
+              onReconnect={reconnect}
+            />
           </div>
-
-          {isWidgetOn("capabilities") && (
-            <div className="widget-panel order-2 flex min-h-0 flex-col lg:order-1 lg:col-span-3">
-              <LazyCapabilitiesPanel
-                capabilities={capabilities}
-                gatewayOnline={gatewayOnline}
-              />
-            </div>
-          )}
-
-          {(isWidgetOn("tailscale") ||
-            isWidgetOn("integrations") ||
-            isWidgetOn("mcp_tools") ||
-            isWidgetOn("mcp_data")) && (
-            <div className="widget-panel order-3 min-h-0 max-h-[50vh] lg:max-h-none lg:col-span-3">
-              <LazySidePanels
-                tailscale={state.tailscale}
-                integrations={state.integrations}
-                mcp={state.mcp}
-                gatewayOnline={gatewayOnline}
-                showTailscale={isWidgetOn("tailscale")}
-                showIntegrations={isWidgetOn("integrations")}
-                showMcpTools={isWidgetOn("mcp_tools")}
-                showMcpData={isWidgetOn("mcp_data")}
-                mcpCategoryFilter={mcpCatFilter}
-                onMcpRefresh={() => reconnect()}
-              />
-            </div>
-          )}
-        </main>
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1">
+          <Sidebar
+            currentView={currentView}
+            onViewChange={handleViewChange}
+            mobileOpen={mobileNavOpen}
+            onCloseMobile={() => setMobileNavOpen(false)}
+          />
+          <div className="flex-1 min-h-0 overflow-auto p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+            {renderView(currentView)}
+          </div>
+        </div>
       )}
 
       {settingsOpen && (

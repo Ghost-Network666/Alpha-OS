@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -26,11 +28,70 @@ OPENCLAW_HOME = openclaw_home()
 
 
 def hermes_installed() -> bool:
-    return hermes_home().exists()
+    if hermes_home().exists():
+        return True
+    return _hermes_likely_running()
 
 
 def openclaw_installed() -> bool:
     return openclaw_home().exists()
+
+
+def _hermes_likely_running() -> bool:
+    """Detect if Hermes gateway or API is connected/running on a live port or process.
+    This supports 'anything connected to .hermes gateway' or 'been used on a live port for .hermes'.
+    """
+    # 1. Process check (hermes or hermes-agent running)
+    try:
+        out = subprocess.check_output(
+            ["pgrep", "-f", r"hermes|hermes-agent"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        if out.strip():
+            return True
+    except Exception:
+        pass
+
+    # 2. Listening ports check - only if the line mentions hermes or we have config evidence
+    common_hermes_ports = {8642, 9999, 8081, 9000}
+    try:
+        out = subprocess.check_output(
+            ["ss", "-tlnp"], text=True, stderr=subprocess.DEVNULL
+        )
+        for line in out.splitlines():
+            line_l = line.lower()
+            if "hermes" in line_l:
+                return True
+            m = re.search(r":(\d+)", line)
+            if m:
+                p = int(m.group(1))
+                if p in common_hermes_ports and "hermes" in line_l:
+                    return True
+    except Exception:
+        pass
+
+    # 3. Fallback: check if any Hermes config/env references a port that is currently listening
+    try:
+        env = read_hermes_env()
+        for key in ("API_SERVER_PORT", "HERMES_GATEWAY_URL"):
+            val = env.get(key, "")
+            m = re.search(r":(\d+)", val)
+            if m:
+                p = int(m.group(1))
+                # quick check if that port is listening
+                try:
+                    out2 = subprocess.check_output(
+                        ["ss", "-tlnp"], text=True, stderr=subprocess.DEVNULL
+                    )
+                    if f":{p}" in out2:
+                        return True
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    return False
 
 
 PALETTE = ["#00f0ff", "#39ff14", "#ff2a6d", "#ff9f1c", "#7b2cbf"]
@@ -131,6 +192,27 @@ def _hermes_candidates() -> list[str]:
     if api.get("host") and api.get("port"):
         urls.append(f"http://{api['host']}:{api['port']}")
 
+    # Include any live ports we discovered (for "live port for .hermes" cases)
+    try:
+        live_ports = []
+        out = subprocess.check_output(
+            ["ss", "-tlnp"], text=True, stderr=subprocess.DEVNULL
+        )
+        for line in out.splitlines():
+            if "hermes" in line.lower():
+                m = re.search(r":(\d+)", line)
+                if m:
+                    live_ports.append(int(m.group(1)))
+            else:
+                m = re.search(r":(\d+)", line)
+                if m and int(m.group(1)) in (8642, 9999, 8080, 8081, 9000):
+                    live_ports.append(int(m.group(1)))
+        for p in sorted(set(live_ports)):
+            urls.append(f"http://127.0.0.1:{p}")
+            urls.append(f"http://localhost:{p}")
+    except Exception:
+        pass
+
     urls.extend([
         "http://127.0.0.1:9999",
         "http://localhost:9999",
@@ -208,8 +290,11 @@ def _openclaw_token() -> str:
 
 async def detect_hermes() -> RuntimeInfo:
     info = RuntimeInfo(name="hermes")
-    if not hermes_home().exists():
-        info.details["reason"] = "no ~/.hermes directory"
+    home_exists = hermes_home().exists()
+    running = _hermes_likely_running()
+
+    if not home_exists and not running:
+        info.details["reason"] = "no ~/.hermes directory and no live Hermes process or port detected"
         return info
 
     api_key = _hermes_api_key()

@@ -84,11 +84,52 @@ info "Node: ${NODE_VER}"
   fail "frontend/ not found — clone the full repo: git clone https://github.com/Ghost-Network666/Alpha-OS.git"
 
 # ── Detect Hermes / OpenClaw (before setup) ─────────────────
+# Strong auto-detect per requirements:
+# - Directory presence
+# - Anything connected to .hermes gateway (process or successful reachability hints)
+# - Anything connected or been used on a live port for .hermes
 HERMES_DETECTED=false
 OPENCLAW_DETECTED=false
 HERMES_PROFILE="alpha"
 
-[[ -d "${HOME}/.hermes" && -d "${HOME}/.hermes/profiles" ]] && HERMES_DETECTED=true
+if [[ -d "${HOME}/.hermes" && -d "${HOME}/.hermes/profiles" ]]; then
+  HERMES_DETECTED=true
+fi
+
+# Live process or port detection for Hermes (gateway / API server)
+# Supports: anything connected to .hermes gateway OR anything on a live port used by .hermes
+if ! $HERMES_DETECTED; then
+  if pgrep -f 'hermes' &>/dev/null 2>&1 || pgrep -f 'hermes-agent' &>/dev/null 2>&1; then
+    HERMES_DETECTED=true
+    info "Hermes process detected (live gateway)"
+  fi
+fi
+
+# Collect actual ports from Hermes env/config files (any profile) and check if live
+if ! $HERMES_DETECTED; then
+  HERMES_PORTS=()
+  for envf in "${HOME}/.hermes/.env" "${HOME}/.hermes/profiles"/*/.env; do
+    [[ -f "$envf" ]] || continue
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      case "$line" in
+        API_SERVER_PORT=*|HERMES_GATEWAY_URL=* )
+          p=$(echo "$line" | sed -E 's/.*[:=]([0-9]+).*/\1/' | tr -cd '0-9')
+          [[ "$p" =~ ^[0-9]+$ ]] && HERMES_PORTS+=("$p")
+          ;;
+      esac
+    done < "$envf"
+  done
+  # also common fallbacks
+  HERMES_PORTS+=(8642 9999 8080 8081 9000)
+  for p in "${HERMES_PORTS[@]}"; do
+    if ss -tlnp 2>/dev/null | grep -qE ":${p}[^0-9]"; then
+      HERMES_DETECTED=true
+      info "Hermes live port ${p} detected from config or common (gateway/API in use)"
+      break
+    fi
+  done
+fi
+
 [[ -d "${HOME}/.openclaw" ]] && OPENCLAW_DETECTED=true
 
 if [[ "${HERMES_DETECTED}" == true ]]; then
@@ -113,7 +154,7 @@ if [[ -z "${RUNTIME}" ]]; then
   if [[ "${HERMES_DETECTED}" == true && "${OPENCLAW_DETECTED}" == true ]]; then
     if [[ -t 0 ]]; then
       echo ""
-      echo -e "${YELLOW}Detected both Hermes and OpenClaw.${NC}"
+      echo -e "${YELLOW}Detected both Hermes and OpenClaw (live usage on ports/processes for .hermes considered).${NC}"
       echo "[1] Hermes (${HERMES_PROFILE} profile)  [2] OpenClaw"
       read -r -p "Choice [1/2] (default 1): " RUNTIME_CHOICE
       case "${RUNTIME_CHOICE:-1}" in
@@ -127,7 +168,7 @@ if [[ -z "${RUNTIME}" ]]; then
     info "Auto-selected OpenClaw (~/.openclaw)"
   elif [[ "${HERMES_DETECTED}" == true ]]; then
     RUNTIME="hermes"
-    info "Auto-selected Hermes (${HERMES_PROFILE} profile)"
+    info "Auto-selected Hermes (${HERMES_PROFILE} profile) — live gateway/port detected"
   else
     info "No ~/.hermes or ~/.openclaw — defaulting to Hermes (offline UI)"
   fi
