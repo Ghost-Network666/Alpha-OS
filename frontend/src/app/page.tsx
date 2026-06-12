@@ -257,7 +257,7 @@ export default function DashboardPage() {
       default:
         return (
           <div className="p-8 text-center text-slate-400">
-            View "{view}" coming soon. Use the sidebar to explore other sections.
+            View &quot;{view}&quot; coming soon. Use the sidebar to explore other sections.
           </div>
         );
     }
